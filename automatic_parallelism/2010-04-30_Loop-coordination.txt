@@ -1,0 +1,141 @@
+Loop coordination
+=================
+
+The goals of this work are to:
+
+    1) Reduce stack usage in right-recursive dependant code.
+
+    2) Spawn off computations in the order that they're available to
+       be worked on _and_ have them worked on in this order.  Left
+       recursive code currently puts the computation that will block
+       for the longest time one on the local spark stack first, if
+       it's stolen by another processor it will be worked on first.
+
+
+single right recursion
+----------------------
+
+This is the important case, it's this case that we wish to reduce
+stack usage for.  Since the first conjunct uses the original stack
+and must keep it safe until the second conjunct completes.  However
+the second conjunct uses a new (disposable) stack that it can throw
+away as soon as it finishes.
+
+pl(In, Out) :-
+	(
+		base case
+	;
+		p(In, X),
+		...,
+		pl(In, X, TmpOut),
+		...
+		Out = ...
+	).
+
+pl(In, Out) :-
+	create_loop_control(8, LC),
+	pl'(LC, In, Out).
+
+pl'(LC, In, Out) :-
+	(
+		base case
+	;
+		( if
+			free_slot_in(LC, FS)
+			% short_spark_queue,
+		then
+			spawn_off(FS,
+				(p(In, X),
+				copy_to_parent(X),
+				join_and_terminate(FS, LC))
+			),
+			...,
+			pl'(LC, In, X, TmpOut),
+			...,
+			join_and_continue(FS, LC),
+			Out = ...
+		else
+			p(In, X),
+			...,
+			pl'(LC, In, X, TmpOut),
+			...
+			Out = ...
+		)
+	).
+
+This transformation essentially spawns of the first conjunct against
+the second.  Since there will be a dependant variable (otherwise we
+could have used a right-to-left recursion transformation).  For it to
+be optimal, we need to be sure that the spawned off computation can
+begin executing immediately.
+
+The loop control should have the following fields.
+
+int capacity         
+
+    How many CPUs at most may work on this loop, this defines the size
+    of the lc_free_stacks array.
+
+stack** lc_stacks 
+
+    The call stacks (or contexts) that are pre-allocated and ready to
+    execute iterations of the loop.
+
+The free slot structure is probably a context (used implicitly) but it
+must also contain a synchronisation term.  pl' needs to wait for its
+spawned off computation and only it's computation for that iteration
+in join_and_continue.
+
+
+single left recursion
+---------------------
+
+This case is less important because:
+
+    1) It occurs infrequently.
+
+    2) It's already efficient WRT stack usage.
+
+    3) It's not necessarily dependant.
+
+This could be a pesimisation for independent code, since we can spark
+independent computations earlier.
+
+
+pl(In, Out) :-
+	(
+		base case
+	;
+		pl(In, X),
+		...,
+		p(In, X, TmpOut),
+		...
+		Out = ...
+	).
+
+pl(In, Out) :-
+	Sparks = []
+	pl'(Sparks, In, Out).
+
+pl'(!.Sparks, In, Out) :-
+	(
+		( if have_some_free_CPUs
+		then
+			spawn_off_all_sparks_n_at_a_time(8, !.Sparks),
+			base case
+		else
+			base case,
+			spawn_off_all_sparks_n_at_a_time(8, !.Sparks)
+		)
+	;
+		S = create_spark(FS, p(In, X, TmpOut)),
+		!:Sparks = [S | !.Sparks],
+		pl'(!.Sparks, In, X, TmpOut),
+		Out = ...
+	).
+
+Zoltan and I agree that the switch in the base case may be an
+over-optimisation.
+
+In this transformation none of the sparks are added to the spark queue
+until they're all ready.
