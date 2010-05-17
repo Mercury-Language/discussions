@@ -1,0 +1,68 @@
+
+Hi Zoltan, Peter.
+
+I was talking with Julien, Peter Wang and Ian today about the stack segment grades.
+
+The existing runtime system allocates memory for stacks in units of MR_unit,
+which is the maximum of the page size and a value that is an estimate of a
+CPU's layer one cache size.  (This is a bug, this value should be guaranteed to
+be a multiple of the page size).  All memory 'zones' (contiguous regions) have
+some usable memory, an optional redzone, and a hardzone.
+
+ +----------------------+ Top address.
+ |                      |                 
+ | Hard Zone (1 unit)   |                 
+ |                      |                 
+ +----------------------+ Max address.    
+ |                      |                 
+ |  Optional red-zone   | Red-zone address.
+ |                      |                            
+ +----------------------+ Red-zone base.             
+ |                      |                            
+ |                      |                            
+ |                      |                            
+ |                      |                            
+ |                      |                            
+ |                      |                            
+ |                      |                            
+ |                      |                            
+ |                      |                            
+ |                      |                            
+ |  Stack               |                            
+ |  (Grows upwards)     | Min address (Base + offset)
+ |                      |              
+ +----------------------+ Base address.
+
+All memory address except for Min address, and the stack segment threshold must
+be page aligned.
+
+There are a number of bugs:
+
+  1) Memory is allocated in units of MR_unit.  It is better to allocate memory
+     in units of pages and simply make MR_unit a minimum.
+
+  2) The hard zone is 1 MR_unit long, this wastes memory as it only need be one
+     page long.  (one page is wasted in most cases).
+
+  3) The first segment on every stack has a red-zone that is unused.  Stack
+     segments are designed to work without a red-zone.
+
+  4) In parallel grades stack segments of two different sizes are used, this
+     only makes sense as an optimisation for the non-stack segment parallel grade.
+
+It's my understanding that the mandatory hard zone protects stacks from
+overflowing and the red-zone detects when stacks need to be expanded or have
+extra segments added.  Therefore the red-zone may be unprotected but the
+hard-zone must always be protected.
+
+Peter suggested that the hard-zone isn't necessary if the runtime and compiler
+aren't buggy.  Julien said that zones used for trails should have a hard-zone
+since they're often used with hand written C.
+
+Last week we spoke about the idea of possibly using a red zone _if_ we think
+there are performance issues with testing the current position in the stack
+segment at runtime.  However this is not something we're currently considering.
+Since the support already exists in the runtime I'd rather not remove it, or
+the hardzone for stack segments.  It would be possible to remove the hard zone
+to save some memory, as Peter said, but it's not worth my effort right now.
+
