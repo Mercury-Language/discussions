@@ -69,4 +69,8 @@ runtime I'd rather not remove it, or the hardzone for stack segments.
 We should disable these for stack segments, but leave support in the
 runtime in-case we want to experiment with a redzone later on.
 
-
+Further improvements should be made and tested.  For one thing each
+engine should keep it's own cache of free stack segments.  And the
+test and update the stack pointer code should be re-written.  It
+should be possible to write it in assembly and gain a performance
+boost.
