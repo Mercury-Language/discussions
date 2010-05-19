@@ -55,14 +55,18 @@ overflowing and the red-zone detects when stacks need to be expanded or have
 extra segments added.  Therefore the red-zone may be unprotected but the
 hard-zone must always be protected.
 
-Peter suggested that the hard-zone isn't necessary if the runtime and compiler
-aren't buggy.  Julien said that zones used for trails should have a hard-zone
-since they're often used with hand written C.
+Peter suggested that the hard-zone isn't necessary if the runtime and
+compiler aren't buggy.  Julien said that zones used for trails should
+have a hard-zone since they're often used with hand written C.  I
+spoke with Zoltan about this recently, he agreed that the hard-zone
+isn't necessary for stack segment zones.
 
-Last week we spoke about the idea of possibly using a red zone _if_ we think
-there are performance issues with testing the current position in the stack
-segment at runtime.  However this is not something we're currently considering.
-Since the support already exists in the runtime I'd rather not remove it, or
-the hardzone for stack segments.  It would be possible to remove the hard zone
-to save some memory, as Peter said, but it's not worth my effort right now.
+Last week we spoke about the idea of possibly using a red zone _if_ we
+think there are performance issues with testing the current position
+in the stack segment at runtime.  However this is not something we're
+currently considering.  Since the support already exists in the
+runtime I'd rather not remove it, or the hardzone for stack segments.
+We should disable these for stack segments, but leave support in the
+runtime in-case we want to experiment with a redzone later on.
+
 
