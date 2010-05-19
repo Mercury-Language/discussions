@@ -1,0 +1,74 @@
+
+Scheduling of Middle Goals
+==========================
+
+Consider a conjunction that we'd like to parallelise.
+
+  expensive_call_a(A, B, C),
+  D = B + C,
+  expensive_call_b(D, E).
+
+We can parallelise this in several obvious ways.
+
+  expensive_call_a(A, B, C) &
+  D = B + C &
+  expensive_call_b(D, E).
+
+  expensive_call_a(A, B, C) &
+  (
+    D = B + C,
+    expensive_call_b(D, E)
+  )
+
+  (
+    expensive_call_a(A, B, C),
+    D = B + C
+  ) &
+  expensive_call_b(D, E).
+
+Which one we choose depends on how early B and C are produced and how
+late D is consumed.  However, there are other considerations.  One of
+these is that there may be earlier goals within the conjunction that
+we want to parallelise.  How they are scheduled will have an effect on
+how when variables are produced for a and b.  In general the
+scheduling of a later goal depends on the scheduling of an earlier
+goal, but _never_ the other way around.
+
+Other cases involve multiple goals between expensive calls.  We should
+make the decision of how to schedule each one individually.
+
+Consider a dependency graph between calls p and q:
+
+              B 
+             / \  
+  p ------ A/   \D ----- q
+            \   /         
+             \ /
+              C  
+                  
+A depends on p,
+B depends on A,
+C depends on A,
+D depends on C and B,
+q depends on D.
+
+These dependencies restrict how goals between p and q may be
+scheduled.  For example, if the production of B may only be scheduled
+in the same parallel conjunct or a later conjunct than the production
+of A.
+
+In some cases it may be possible to push one or more of these cheap
+goals into one of the calls that use them.  When this is possible it
+is desirable.  To break ties in these cases, these goals should be
+pushed into the cheapest of the possible calls, this way the elapsed
+time and dead time of the parallel conjunction is minimised.  Zoltan
+said he'd be best to do this.  I think some profiler feedback
+information will be useful, at least to give the costs of the calls so
+that the best decision can be made.
+
+In other cases the analysis tool should do a linear search to find the
+best schedule, a later version of the runtime should do a branch and
+bound search over a N^2 search space to look for a more optimal
+solution.  We will be able to test if the later search strategy is
+better and finding optimal solutions.
+
