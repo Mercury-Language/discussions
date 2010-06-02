@@ -1,0 +1,59 @@
+Frontier is a priority queue containing
+	- calls, whose weight is the time they take, and
+	- parallelizations, whose weight is the time they save
+
+Each call in the queue has a list of its ancestor parallelizations.
+For each parallelization in that list, we know whether it is committed or not.
+This probably requires an id for each parallelization, and a database that
+maps that id to committed/notcommitted, plus the latest info about
+- the times each conjunct produces and/or consumes its shared variables,
+- the sequential and parallel execution times of the conjunction,
+- the difference and ratio of those two numbers, the speedup and the CPU
+  occupancy rate.
+All of those parameters except the sequential execution time can change when
+the descendants of component conjuncts get parallelized.
+
+The list of ancestor parallelizations call in the queue is ordered so that
+- committed parallelizations come first, in any order, and then
+- uncommitted parallelizations come next, ordered by speedup, with the
+  biggest speedup first.
+
+Frontier = [Call to main in profiling tree]
+while Frontier is not empty do
+	(Head, Frontier) := get largest element from Frontier
+	if cost of Head < HeadThreshold then
+		exit loop
+	endif
+
+	if Head is a parallelization, commit to it
+	if Head is a call
+		if the combined CPU occupancy ratio from the committed speedups
+			of the ancestor parallelizations
+			meets or exceeds the CPU occupancy target
+		then
+			do nothing (do not analyze this call or its children)
+		else
+			NewPotentials := the conjunctions in the body of the
+				callee that can be profitably parallelized
+			insert each of the NewPotentials into Frontier
+			for each child call that is above
+				the spawn-off threshold
+			do
+				for each NewPotential the call participates in
+				do
+					insert NewPotential into
+						the call's ancestor list
+				done
+				insert the call into Frontier
+			done
+		endif
+	endif
+done
+
+issue: the precise algorithm for computing NewPotentials. The absolute speedup
+you can get has to be traded off against any potential reduced speedup in
+committed ancestor parallelizations, but how do we account for any reduced
+speedup in uncommitted ancestor parallelizations?
+
+issue: how do we deal with the fact that an expensive procedure will in general
+have several calls to it in Frontier?
