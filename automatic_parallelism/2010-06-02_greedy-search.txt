@@ -1,0 +1,120 @@
+
+Greedy search for Parallelism
+=============================
+
+Considering the call tree of a program, the calls at the root or top
+of the tree are going to be the most expensive (their cost plus the
+cost of their children).  Therefore the best opportunities for
+parallelism will be near the top of the call tree.
+
+However this cannot be applied everywhere.  Consider the following
+call tree of independent calls, each node is annotated with it's cost
+as a percentage of the program's cost.
+
+                                  o 100%     
+                                 /\          
+                                /  \         
+                               /    \        
+                              /      \       
+                             /        \      
+                            /          \     
+                           /            o 10%
+                          o 90%        
+                         / \   
+                        /   \  
+                       /     \ 
+                      /       \
+                     /         o 45%
+                    o 45%           
+
+If we have exactly two processors and don't want any parallel
+slackness it is best to parallelise the two 45% calls against one
+another rather than the 10% and 90% calls.
+
+The search code must maintain the following state:
+
+    + The current 'frontier' a priority list of the most expensive
+      unexplored subtrees.  This must be initialised to the root node
+      in the call graph.
+
+      Each node in the frontier list contains the set of candidate
+      parallel conjunctions that are being considered in the node's
+      callers.
+
+      XXX: This is given by the paragraph above.
+      Each node in the frontier list also contains the amount of
+      parallel execution resources left (note that this is
+      over-optimistic so that we generate parallel slackness).
+      Alternatively we could track the amount used so far and the
+      total available. 
+
+    + A priority list of candidate parallel conjunctions.  These are
+      the things that we're currently considering parallelising, this
+      is initially empty.
+      
+      Each candidate parallel conjunction must contain all the
+      information that is required to re-evaluate it's speedup if any
+      of it's subgoals or their callees are parallelised.
+
+For each iteration of the search:
+
+    1) Take a SCC from the head of the frontier list.  Let it be
+       called SCC.
+       + If unsuccessful, terminate, there's nothing left to
+         parallelise.
+
+    2) If, at SCC's position in the call tree, we have exhausted
+       parallel execution resources and the cost of SCC is less than
+       the speedup made in the least optimal parallelisation of one of
+       it's parents then proceed to the next stop in the search
+       (Discard this clique).
+
+       We do this because if it's cost is already cheaper than the
+       least optimal parallelisation made in one of it's parents, then
+       any parallelisation of anything in this SCC or below it will
+       never be more optimal than the least optimal parallelisation in
+       it's parents.
+
+    3) Find SCC's entry procedure, call it Proc
+       (I already have code to do this).
+
+    4) Add SCC's children to the frontier.
+
+    5) Look for parallelisation opportunities in Proc's body.
+
+       There may be multiple places where parallelism can be
+       introduced in Proc (not to be confused with multiple ways of
+       parallelising each place).  Consider these in order from most
+       to least profitable, for each do:
+
+          Re-evaluate the parallelisations in SCC's parents assuming
+          that Proc's performance will change because of this
+          parallelisation.  Don't yet update this as global
+          information.
+
+          If the most profitable parallelisation here a good idea
+          if we commit to the parallelisations made in SCC's parents:
+
+             Also commit to this parallelisation.
+
+             Update the parallelisations in SCC's parents.
+
+          Else-if assuming that we commit to all but the least profitable
+          parallelisation in SCC's parents.  Is it also good to commit
+          to this parallelisation in Proc.
+
+             Commit to this parallelisation,
+
+             Don't commit to the least profitable in Proc's parents.
+
+             Update the parallelisations in SCC's parents.
+
+          /there may be more cases here/
+
+          Else:
+          
+             Don't commit to this parallelisation,
+
+             Break out of this loop (don't look at any of the other
+             parallelisations in this procedure.
+
