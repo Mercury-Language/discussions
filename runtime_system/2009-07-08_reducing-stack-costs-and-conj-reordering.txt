@@ -1,0 +1,64 @@
+
+Avoiding the creation of stacks
+===============================
+
+These notes are written by Zoltan after our meeting.
+
+     For each context, record its parent context (the one that created
+     it).
+
+     When an parallel conj has two independent goals, and one is known
+     to be more expensive (because it is directly or indirectly
+     recursive), move the expensive goal first, so that the spark of
+     the other is likely not to need the creation of a context for it,
+     since by the time it gets scheduled, an existing context is
+     likely to be available for reuse (take over or borrowing).
+
+     When the only outstanding goal at a barrier is a spark, that
+     spark should be able to "take over" the context of the goal that
+     created the barrier.
+
+     When a context is blocked, make its stack available for
+     "borrowing" by sparks that would otherwise need to have new
+     contexts (and therefore stacks) created for them, in an effort to
+     reuse the memory taken by their stack. We would need to save the
+     stack segment between the current top of stack and the most
+     recent common ancestor of the original owner and the borrower of
+     the stack.
+
+       -- I think that sparks should only be able to borrow from
+          contexts that block on them - pbone.
+
+     We will need to make provision for the stack being borrowed not
+     from its original owner but from a previous borrower.
+
+My own notes
+
+    Recently it's become clear that the creation of stacks is too
+    costly, largely in the amount of memory required.  To parallelise
+    the ICFP2000 ray-tracer, creating a context for each stack frame
+    (when using right recursion) which has a stack quickly exhausts
+    the memory of a 4GB machine.
+    
+    Each parallel computation in mercury's right part is represented
+    by a spark while the left part is executed immediately.  When the
+    computation is right-recursive the left hand side will finish
+    quickly and block, waiting for the spark that it scheduled to be
+    executed (if that spark was scheduled globally).  If the same
+    engine goes to execute that spark globally it does so within a new
+    context, this allocation of contexts quickly uses up excess
+    memory.
+    
+    We propose three strategies to reduce this problem.
+    
+    1. If the compiler finds an independent parallel computation and
+       it knows one conjunct is more expensive than the other it
+       should make the most expensive conjunct the left-most conjunct.
+    
+    2. The runtime system should implement 'context stealing'.
+    
+    3. The runtime system should implement 'context borrowing'.
+    
+    I'm also tasked with profiling the synchronisation primitives that
+    we're using.
+    

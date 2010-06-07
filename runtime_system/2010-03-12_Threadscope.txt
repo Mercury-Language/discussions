@@ -1,0 +1,32 @@
+
+Threadscope
+-----------
+
+I begun implementing Threadscope support for Mercury late in 2009,
+After putting it on hold while I prepared for LCA2010 I finished most
+of the work on it in February 2010.
+
+Threadscope is a viewer for 'eventlog' profiles.  It, and the eventlog
+format are designed for GHC.  Since the Mercury runtime uses a similar
+threading model we're able to write out eventlog profiles from our
+executable.
+
+With basic threadscope support I was able confirm my understanding of
+how the Mercury runtime behaved before thread stealing was
+implemented.  That is a few sparks would be added to the global queue
+before the rest where put on (usually) a single engine's local queue.
+By the time the globally-scheduled work had finished there was still
+plenty of locally allocated work that should have been scheduled
+globally.
+
+Work stealing allows this scheduling decision to be postponed until
+the last moment, when either the engine with the locally scheduled
+work takes something from it's work queue, or when a different engine
+has no local work to do and is able to steal work from another engine.
+
+Threadscope also provided clear visualisations of the effects of
+granularity vs parallel slackness.  Where a few big tasks where
+spawned it was usual to see threads finish their work and become idle
+while other threads still had work to do.  With more, smaller tasks
+this was less of a problem but as the number of tasks was increased
+and their size was decreased overheads begun to dominate.

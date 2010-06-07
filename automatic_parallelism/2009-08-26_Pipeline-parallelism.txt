@@ -1,0 +1,15 @@
+Pipeline parallelism
+====================
+
+If one computation produces values for another computation to consume
+and those values can be stored within a list or similar structure the
+list can be turned into a sequence (lazy list) to allow for
+producer/consumer or pipeline parallelism.
+
+The same can probably be done with some of the things in the mercury
+standard library under thread.sequence and such.
+
+The danger with any of these things is that if the producer creates
+values faster than they can be consumed this can lead to the queue
+growing quite large in size and causing other performance issues.
+

@@ -1,0 +1,9 @@
+
+In Multi-Socket and Multi-Die systems communication costs are
+non-uniform, either because of bus bandwidth/latency or the memory
+hierarchy.  This is also applicable to mutli-core hyper-threading
+systems, which will be commodity systems shortly.
+
+On these systems I believe it would be preferable for an engine to
+steal aparks from engines on nearby cores.
+

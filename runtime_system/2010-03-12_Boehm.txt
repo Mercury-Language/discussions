@@ -1,0 +1,31 @@
+
+The Boehm GC
+------------
+
+Mercury distributes it's own version of the Boehm garbage collector.
+This is a modified version of the original code.  Over the years we've
+added customisations that have slowly been pushed upstream or
+re-implemented upstream.  The only customisation remaining at this
+point is a little bit of instrumentation code to help threadscope
+work.
+
+This needs to be pushed upstream so it can be maintained there, and
+where people more familiar with the Boehm sources can verify that it
+instruments all the times when the GC switches from allocation to
+collection and back.
+
+Recently upstream changes to Boehm where pulled into the Mercury
+tree.  I'd like to measure how these affect performance.
+
+Boehm stops the world in a very heavy-handed manner.  This is because
+it cannot guarantee the cooperation of the program.  In the case of
+Mercury we can cooperate a lot more.  Boehm currently stops the world
+by registering a signal handler and sending a signal to each mutator
+thread and blocking the threads in the signal handler.  And then using
+another signal to unblock them.  We'd prefer to use a global variable
+that is checked each time GC_MALLOC() is called.  And if possible to
+have the mutator threads perform parallel marking, this will avoid
+context switches and because the mutator threads can be pinned to
+processors where as the marking threads may not be, marking may be
+faster because the processor caches will already be warm.
+

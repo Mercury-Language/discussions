@@ -1,0 +1,48 @@
+
+Or Parallelism in Mercury
+=========================
+
+Given that Mercury implements And parallelism I suspect that there
+must be a transformation that allows expensive non deterministic code
+to be parallelised, such as a large parallel search.
+
+Consider
+
+   (
+       DisjA(Result)
+   ;
+       DisjB(Result)
+   )
+
+ <=>
+
+   DisjA(ResultA),
+   DisjB(ResultB),
+   (
+       Result = ResultA
+   ;
+       Result = ResultB
+   )
+
+This only works if DisjA and DisjB cannot fail.
+
+   ( DisjA(ResultA) ->
+       MaybeResultA = yes(ResultA)
+   ;
+       MaybeResultA = no
+   )
+   % As above except with B.
+   (
+       MaybeResultA = yes(Result)
+   ;
+       MaybeResultB = yes(Result)
+   )
+ 
+This now works.  Note that it has different operational semantics than
+the simple disjunction above.  It will attempt to evaluate both
+disjuncts before returning a single result.  The simple disjunction is
+lazier since it will not evaluate DisjB until either the DisjA fails
+or the system backtracks to this point.  Perhaps this is useful
+specifically when DisjA is likely to fail.
+
+        
