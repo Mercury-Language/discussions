@@ -1,6 +1,41 @@
+
+Greedy search for Parallelism
+=============================
+
+Considering the call tree of a program, the calls at the root or top
+of the tree are going to be the most expensive (their cost plus the
+cost of their children).  Therefore the best opportunities for
+parallelism will be near the top of the call tree.
+
+However this cannot be applied everywhere.  Consider the following
+call tree of independent calls, each node is annotated with it's cost
+as a percentage of the program's cost.
+
+                                  o 100%     
+                                 /\          
+                                /  \         
+                               /    \        
+                              /      \       
+                             /        \      
+                            /          \     
+                           /            o 10%
+                          o 90%        
+                         / \   
+                        /   \  
+                       /     \ 
+                      /       \
+                     /         o 45%
+                    o 45%           
+
+If we have exactly two processors and don't want any parallel
+slackness it is best to parallelise the two 45% calls against one
+another rather than the 10% and 90% calls.
+
+The search code must maintain the following state:
+
 Frontier is a priority queue containing
-	- calls, whose weight is the time they take, and
-	- parallelizations, whose weight is the time they save
+    - calls, whose weight is the time they take, and
+    - parallelizations, whose weight is the time they save
 
 Each call in the queue has a list of its ancestor parallelizations.
 For each parallelization in that list, we know whether it is committed or not.
@@ -10,6 +45,7 @@ maps that id to committed/notcommitted, plus the latest info about
 - the sequential and parallel execution times of the conjunction,
 - the difference and ratio of those two numbers, the speedup and the CPU
   occupancy rate.
+- the data needed to re-evaluate these measurements.
 All of those parameters except the sequential execution time can change when
 the descendants of component conjuncts get parallelized.
 
@@ -20,34 +56,38 @@ The list of ancestor parallelizations call in the queue is ordered so that
 
 Frontier = [Call to main in profiling tree]
 while Frontier is not empty do
-	(Head, Frontier) := get largest element from Frontier
-	if cost of Head < HeadThreshold then
-		exit loop
-	endif
+    (Head, Frontier) := get largest element from Frontier
 
-	if Head is a parallelization, commit to it
-	if Head is a call
-		if the combined CPU occupancy ratio from the committed speedups
-			of the ancestor parallelizations
-			meets or exceeds the CPU occupancy target
-		then
-			do nothing (do not analyze this call or its children)
-		else
-			NewPotentials := the conjunctions in the body of the
-				callee that can be profitably parallelized
-			insert each of the NewPotentials into Frontier
-			for each child call that is above
-				the spawn-off threshold
-			do
-				for each NewPotential the call participates in
-				do
-					insert NewPotential into
-						the call's ancestor list
-				done
-				insert the call into Frontier
-			done
-		endif
-	endif
+    if Head is a parallelization, commit to it
+    if Head is a call
+        if cost of Head < HeadThreshold then
+            # This can only ever happen for calls - depending on the
+            # value of HeadThreshold but HeadThreshold doesn't make
+            # sense for parallelisations.
+            exit loop
+        endif
+        if the combined CPU occupancy ratio from the committed speedups
+            of the ancestor parallelizations
+            meets or exceeds the CPU occupancy target
+        then
+            do nothing (do not analyze this call or its children)
+        else
+            NewPotentials := the conjunctions in the body of the
+                callee that can be profitably parallelized
+            insert each of the NewPotentials into Frontier
+            for each child call that is above the spawn-off threshold, 
+                excluding self-recursive calls and visited
+                mutual-recursive calls
+            do
+                for each NewPotential the call participates in
+                do
+                    insert NewPotential into
+                        the call's ancestor list
+                done
+                insert the call into Frontier
+            done
+        endif
+    endif
 done
 
 issue: the precise algorithm for computing NewPotentials. The absolute speedup
@@ -55,5 +95,108 @@ you can get has to be traded off against any potential reduced speedup in
 committed ancestor parallelizations, but how do we account for any reduced
 speedup in uncommitted ancestor parallelizations?
 
+   Committed ancestor parallelisations
+   -----------------------------------
+
+   It looks like we can handle committed parallelisations completely.
+   Consider a call tree such as:
+
+                                  A 100%     
+                                 /\          
+                                /  \         
+                               /    \        
+                              /      \       
+                             /        \      
+                            /          \     
+                           B 50%        C 50%
+
+   B has a loop in it that is embarrassingly parallel, as well as a
+   little bit of sequential work, by using N
+   processors we can reduce B's runtime by something close to 1/N.
+   A has two independent calls, one to B and one to C.  Their
+   parallelisation is committed to before B is explored.
+
+   Therefore, if we have 8 processors B's cost can either be 50/8 =
+   6.25, Bringing A's cost to 50/8 + 50 = 56.25, or if we commit to A
+   first B has 7 processors and it's runtime becomes 50/7 = 7.14, and
+   A can parallelise this against B bringing A's cost to 50, which is
+   faster.  (Although this is just as fast if we don't parallelise B
+   and uses fewer resources).  The important point here is that when
+   we commit to A we don't have all the information about B and C, but
+   the decision is correct anyway, I haven't thought of a case where
+   this isn't true.  Perhaps there could be an optional final phase in
+   the algorithm that asserts that the committed decisions are still
+   the best.
+
+   This is probably also true if C is parallelisable as well as B.
+   A quick re-think where A's calls to B and C are dependant also
+   seems to work.  This seems to confirm that this is the correct
+   algorithm.
+
+
+   Uncommitted ancestor parallelisations
+   -------------------------------------
+
+   We will always commit to parallelisations in a best-first order.
+   Therefore by the time we want to commit to a parallelisation it
+   must be up-to-date with respect to the parallelisations in it's
+   children.  As we know, changes in it's children can change a
+   parallelisation for better or worse, therefore there are cases
+   where updating a parallelisation may move it to the head of the
+   Frontier list.
+
+   We could guarantee that all parallelisations where up-to-date all
+   the time by re-evaluating all uncommitted ancestors each time we
+   add a parallelisation to NewPotentials.  This might be a good first
+   step, but it is likely to re-compute a lot of work.
+
+   A better solution marks uncommitted ancestors as dirty as it
+   populates NewPotentials.  Then when a parallelisation is taken from
+   the Frontier list all dirtied parallelisations are re-evaluated and
+   marked clean and we re-try to take for the head of the list.  If
+   there are no dirtied parallelisations when we take a
+   parallelisation of the head of the list we can commit to it.
+
+
+Bug:
+   The above algorithm may commit to parallelisations for which we've
+   already exceeded the CPU occupancy.  When committing to a
+   parallelisation we must re-calculate the occupancy based on the
+   committed parallelisations to see if there are still resources
+   available.  If there aren't the parallelisation is dropped.
+
+
 issue: how do we deal with the fact that an expensive procedure will in general
 have several calls to it in Frontier?
+
+   Part of a 'parallelisation's' ID should contain the clique that it's
+   procedure is found in.  The feedback sent to the compiler should
+   include a type such as:
+
+   :- type specialise
+       --->   do_not_specialise,
+       ;      specialise(
+                  ancestor       :: call_site
+              ).
+
+   :- type call_site
+       --->   call_site(
+                  proc           :: string_proc_label,
+                  goal_path      :: string_goal_path,
+                  maybe_parent   :: maybe(call_site)
+              ).
+
+   The chain of ancestors need not reach back to the program's entry
+   point provided that the last ancestor (the call closet to the root
+   of the call tree) is in a procedure with only one ancestor (is only
+   called once).  Whether we do this based on the static call tree or
+   the one that execution actually covered during profiling is
+   something we can experiment with.
+
+   This doesn't yet handle cases where parallelisation is an
+   optimisation in more than one context. XXX: Keep a table from
+   procedure->set(clique) that maps procedures into the cliques that
+   call them and whether the procedure should be parallelised in that
+   clique or not.  This might need to be finer, we might want
+   different parallelisations in different contexts.  Perhaps have two
+   layers of indirection proc->set(parallelisations->set(cliques)).
