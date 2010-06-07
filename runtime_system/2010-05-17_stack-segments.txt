@@ -74,3 +74,32 @@ engine should keep it's own cache of free stack segments.  And the
 test and update the stack pointer code should be re-written.  It
 should be possible to write it in assembly and gain a performance
 boost.
+
+
+Stack segments bug
+------------------
+
+Mercury programs in the asm_fast.gc.par.stseg grade crash.  The crash
+occurs in a forked-off computation, when it attempts to dereference
+MR_parent_sp which is kept in the MercuryEngine structure.  This
+pointer is being setup incorrectly.
+
+printf debugging tells me that the spark we steal contains a valid
+pointer to the synchronisation term which contains incorrect data.
+This is occurring for synchronisation terms which are the first term
+on a new stack segment.
+
+The cause of the bug was:  When contexts block they are saved so that
+another context can be executed, this writes data from the
+MercuryEngine structure into the MR_Context structure.  Data is
+copied back when contexts are resumed.  In stack segment grades this
+includes the current stack segment and stack pointer.
+
+The runtime also re-uses contexts, if a context is no-longer required
+it is kept to save re-allocating it's memory.  When this happens it's
+assumed that the registers in the Mercury engine aren't useful because
+they don't represent a computation under progress, therefore the
+context is not saved.  The context may then contain a stack pointer
+and point to a stack segment that may have been released and
+re-allocated to a different context.  This context will then begin
+execution by trashing the other context's stack.
