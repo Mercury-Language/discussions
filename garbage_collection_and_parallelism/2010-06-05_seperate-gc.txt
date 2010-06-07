@@ -1,0 +1,225 @@
+
+Below is a dialog between Paul Bone (Boney) and Simon Marlow (JaffaCake).  I
+don't know the identities of the other people that spoke up during this
+discussion.  This took place in #ghc on irc.freenode.net on 2010-06-05,
+Timestamps are in Australian Eastern Standard Time.
+
+
+20:25 < Boney> Hey JaffaCake, I gave my Phd Conversion Seminar, (It's
+               like confirmation), I showed Threadscope for Mercury and
+               how it can be used to detect a few common issues.
+20:26 < JaffaCake> great!
+20:26 < Boney> people seemed to like it.
+20:26 < JaffaCake> put some screenshots online
+20:26 < Boney> I'll show you the slides.
+20:29 < Boney> http://ww2.cs.mu.oz.au/~pbone/conversion.pdf
+20:30 < Boney> the first threadscope image is for a naive but
+               parellelised implementation of fib(45), it was hand
+               parallelised with some granularity control.
+20:30 < Boney> but the threadscope profile shows that more, smaller
+               tasks would be better, (CPUs start to become idle while
+               others are finishing their work).
+20:31 < Boney> The second and third images are for the raytracer, they
+               show that there's alot of garbage collection going on
+               here.  The 3rd is zoomed in.
+20:31 < Boney> the forth is for the mandelbrot program, by comparison it
+               does a lot less GC.
+20:44 < Boney> JaffaCake: btw.  I think that the raytracer doesn't
+               parallelise as well because of it's heavy GC use.
+20:45 < Boney> JaffaCake: Therefore, I'm very interested in what you've
+               done/are doing/will do with seperate GC.
+20:45 < JaffaCake> what kind of GC do you have?
+20:47 < Boney> Boehm GC.
+20:47 < Boney> With parallel marking, and thread-local free lists enabled.
+20:52 < JaffaCake> ok, and do you get much parallelism in the GC?
+20:52 < JaffaCake> your slides are taking a while to download here, not sure why
+20:52 < Axman6> Boney: you work for NICTA?
+20:53 < Boney> not a lot.  You can see that with 1 worker and 4 gc
+               threads the runtime of the raytracer is reduced a bit,
+               but not much.
+20:53 < Boney> it's almost the same as for 4 workers and 1 GC thread.
+20:53 < Boney> Axman6: They provide part of my scholarship.
+20:54 < JaffaCake> you almost certainly have locality problems because
+                   the GC workers aren't aligned with your mutator threads
+20:54 < Axman6> i'd quite like to spend some time at NICTA. going to a
+                talk about L4 this week
+20:54 < Boney> JaffaCake: that's not supprising.
+20:54 < JaffaCake> we noticed a big jump in performance when we started
+                   running GCs using the same threads as the mutators,
+                   and generally traversing the same nurseries
+20:55 < Boney> Axman6: L4 is very cool.  My work is related to the
+               Atomic/G12 project (I don't know which is the official
+               name).
+20:55 < Axman6> what's the project about?
+20:55 < Boney> Axman6: www.g12.csse.unimelb.edu.au.
+20:55 < Boney> I think.
+20:56 < Axman6> seems to be it
+20:56 < Boney> JaffaCake: sadly I don't have that much control over
+               Boehm.
+20:56 < Axman6> takes you to
+                http://www.nicta.com.au/research/projects/constraint_programming_platform
+20:56 < Boney> Axman6: that makes sense.
+20:56 < Axman6> looks like something ivanm would be interested in
+20:57 < Boney> JaffaCake: I had an idea to create thread local heaps  If
+               a thread forks of a child, the child gets a new (empty)
+               heap and the other computation (until the 'join') also
+               uses a new heap.
+20:57 < Boney> the parent's heap becomes immutable, no objects may be
+               allocated there and no mutable objects may exist there.
+20:58 < Boney> The parent's heap can't be collected while it's imutable
+               either.
+20:58 < JaffaCake> mutability is the big problem with local heaps,yes
+20:58 < Boney> this way a child can collect in it's own heap without
+               stopping the world or synchronising.
+20:58 < JaffaCake> don't you have mutable objects?
+20:59 < Boney> Once a child creates results, it can either give it's
+               heap to it's parent before exiting, or copy it's results
+               into it's parent's heap (will need synchronisation.
+21:00 < Boney> Yes, there are some mutables, but in practice they are
+               very quickly promoted to immutable or few in number.
+21:00 < JaffaCake> so what happens if you want to mutate something in
+                   the parent's heap?
+21:00 < Boney> I'd be concerned about a mutable that points to objects
+               on a child's heap.  another thread following this pointer
+               can't read the child's heap reliably.
+21:01 < JaffaCake> exactly
+21:01 < Boney> JaffaCake: you know at allocation time if the object is
+               mutable, if so put it in a special mutable heap.
+21:01 < Boney> (BTW,  I havn't completly thought this through).
+21:01 < JaffaCake> usually there's a local heap invariant that prevents
+                   pointers from the global heap into the local heap
+21:01 < Boney> that makes sense.
+21:02 < JaffaCake> the question is, what happens when you have mutable
+                   objects in the global heap
+21:02 < Boney> I guess you could copy imutable objects into the mutable
+               heap when a mutable is made to point at them.
+21:02 < JaffaCake> right, that's the idea used by Doliguez/Leroy in the
+                   original paper about this
+21:02 < Boney> for a lot of this to work you would need a copying
+               accurate GC.
+21:02 < JaffaCake> when you mutate something in the global heap. promote
+                   the transitive closure of the new pointer
+21:03 < Boney> yep.
+21:03 < JaffaCake> and don't allow mutable objects in the local heap,
+                   because they can't be promoted
+21:03 < Boney> yep.
+21:04 < JaffaCake> what we're trying to do is a bit more flexible than
+                   that: you can have pointers from global -> local, but
+                   they have to go through a special proxy object
+21:04 < Boney> Is GHC taking a similar approch.
+21:04 < Boney> ?
+21:04 < JaffaCake> the proxy object will check whether you're on the
+                   right CPU before following the pionter
+21:04 < Boney> JaffaCake: so the proxy object is used for
+               synchronisation?
+21:04 < JaffaCake> not exactly
+21:04 < Boney> hrm,  and if you're not on the right CPU?
+21:04 < JaffaCake> it's just a way to avoid having to eagerly promote
+                   things
+21:05 < JaffaCake> then you send a message requesting that the object be
+                   promoted
+21:05 < Boney> that's pretty cool
+21:05 < JaffaCake> once you have these proxies, then you can have
+                   mutable objects in the local heap again
+21:06 < Boney> I think there's more to be gaind by the invariant that a
+               local heap can't contain mutables.
+21:06 < Boney> If you know this then you also know that the objects
+               can't form a cycle.
+21:06 < JaffaCake> I think that's likely to be bad
+21:06 < JaffaCake> on the contrary, you really want to keep mutable
+                   objects local
+21:06 < JaffaCake> because mutating a global object is expensive
+21:06 < Boney> And you know that new objects may only point to older
+               objects, (sans last call modulo constructor optimisation)
+21:07 < Boney> I guess if you can prove that a particular mutable isn't
+               shared then you can make that optimisation.
+21:07 < Boney> err, that is if you know a mutable is local you don't
+               have to do any synchronisation.
+21:08 < JaffaCake> the problem is, what's your heap invariant
+21:08 < Boney> I don't know what that means exactly.
+21:08 < JaffaCake> i.e. what pointers are allowed
+21:09 < JaffaCake> the simplest invariant is that you can only have
+                   pointers from local -> global
+21:09 < Boney> ah ic.
+21:09 < JaffaCake> but that has implications when there are mutable
+                   objects
+21:09 < Boney> Yep.
+21:09 < JaffaCake> e.g. if you mutate a global object, you have to
+                   promote the transitive closure
+21:10 < JaffaCake> and if you have to promote the TC, then you can't
+                   have local mutables
+21:10 < JaffaCake> because you can't promote a mutable
+21:10 < Boney> So first I have to decide what invarients are appropriate
+               for my language.
+21:10 < JaffaCake> (that is, without doing a whole local GC)
+21:11 < Boney> mmm.
+21:12 < Boney> So I know that thunks in haskell get mutated,  first to a
+               black hole and then to a value.
+21:12 < Boney> Does this mean you have lots of mutables?
+21:12 < Boney> In Mercury we tend to have very few.
+21:13 < JaffaCake> right, these are mutables
+21:13 < JaffaCake> but they only get mutated once
+21:13 < JaffaCake> so we're not so concerned about keeping them local
+21:13 < Boney> Yep.  same with our last-call modulo constructor
+               optimisation.
+21:13 < JaffaCake> if the thunk gets promoted, then we're going to
+                   promote the value anyway
+21:14 < JaffaCake> unless we manage to do a global GC in the meantime
+21:14 < JaffaCake> Boney: so I just looked at your slides
+21:14 < Boney> In fact because a LCmC value is mutated shortly after
+               it's created, I'd like it to be considered immutable by
+               the GC after it's been set.
+21:14 < JaffaCake> I'm sure the raytracer is suffering from lack of locality
+21:15 < JaffaCake> yes
+21:15 < Boney> JaffaCake: that makes sense re: the raytracer.
+21:17 < JaffaCake> I think a lot of the benefit that people are after
+                   with local GC is locality, whereas in GHC we managed to 
+                   get most of the locality benefits without doing local GC
+21:17 < JaffaCake> I wish I'd made this point more prominently in the ICFP'09 paper
+21:18 < JaffaCake> so all that's left is to avoid the synchronisation
+                   costs of doing all those stop-the-world parallel GCs
+21:19 < Boney> yeah,
+21:19 < Boney> I think that last point will become more important as we
+               go to manycore systems.
+21:20 < JaffaCake> sure
+21:20 < Boney> I was looking at the Intel SCCC (and submitted an
+               anti-proposal),
+21:20 < JaffaCake> it's certainly still important to do local GC
+21:20 < JaffaCake> SCCC?
+21:20 < Boney> it's non cache-coherency makes it very hard to program
+               for.  I think that local heaps are going to be neceeeary
+                   to program for it efficiently.
+21:21 < Boney> Single Chip Cloud Computer.  The 48-core chip they built for research.
+21:21 < JaffaCake> ah yes, the offspring of Larrabee
+21:22 < Boney> http://techresearch.intel.com/articles/Tera-Scale/1826.htm
+21:22 < Boney> JaffaCake: Id didn't look that similar to Larrabee.
+21:22 < Boney> *it*
+21:22 < Boney> I thought larrabee had a circular bus.
+21:23 < Boney> and probably other differences.
+21:23  * JaffaCake shrugs
+21:23 < JaffaCake> I don't know the details
+21:23 < JaffaCake> looks like they claim to be able to simulate cache
+                   coherency in software, that's interesting
+21:24 < Boney> Yeah, there are a couple of different models that you can
+               use for programming it.
+21:24 < Boney> a low level API where you have send() and recv()
+               operations for cache data.
+21:24 < Boney> and a higher level one where you have get() and put().  I
+               think..
+21:25 < Boney> I think that the difference is in the low-level one the
+               programmer must know on which CPU the data is, and on the
+               higher level one the programmer doesn't need to know
+               this.
+21:26 < Boney> We submitted an anti-proposal because 1) We don't have
+               the resources to port our work (and build a new GC) for a
+               system without cache coherency.  2) we thought Intel
+               would find this and other feedback useful.
+21:28 < quicksilver> local heaps could be well suited to haskell in
+                     principle
+21:28 < quicksilver> but the details would be fiddly
+21:28 < quicksilver> local heaps for thread-local garbage, and possibly
+                     copy other (read-only) data as required.
+21:29 < Boney> quicksilver: immutable data doesn't need to be local provided
+               that the GC isn't alowed to move it.  (Of course it also helps
+               if it's easy for the GC to see all the pointers to it).
+21:30 < Boney> JaffaCake: Hey, thanks for your time.  This has been useful.
