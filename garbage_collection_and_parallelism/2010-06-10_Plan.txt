@@ -1,0 +1,80 @@
+
+Plan to test for and solve any issues with GC in parallel grades
+================================================================
+
+Test for the problem
+--------------------
+
+Hypothesis:
+
+   The garbage collector doesn't understand 'data affinity', when
+   marking is done in parallel all threads may mark any data.  We
+   believe that this causes them to incur a lot of cache misses for
+   data that's not in their cache and is in other processor's caches.
+   Then when the mutator threads resume they try to 'cache in' the
+   data that they where working on, incurring more cache misses.
+
+Method:
+
+   Determine if cachegrind supports multithreaded programs and the
+   idea of different processor's caches.
+
+   Determine if cachegrind supports the idea of inter-cpu cache misses,
+   where a write to some memory may invalidate another cache's copy of
+   that data.
+
+   Use cachegrind to collect data from two Mercury runs,  a normal one
+   and one where cachegrind ignores the cache misses introduced by the
+   GC and the effects of the GC on the state of the caches.
+
+   If the first test shows a significantly higher cache hit/miss ratio
+   than the second then this supports our hypothesis.
+
+
+Solve the problem
+-----------------
+
+   There are four options:
+
+       Modify the Boehm GC:
+
+           This is going to be very difficult (due to a lack of
+           documentation).  Boehm's design is probably an improper fit
+           for these sort of changes, and of course is an improper fit
+           for Mercury in general.
+
+       AGC:
+
+           Modify Fergus' AGC.  AGC has bit rot so this may also take
+           a significant amount of work.
+
+       HGC:
+
+           Complete and modify Ralph's GC.  This is a promising GC and
+           I already have an understanding of it's algorithm and
+           internals.  The algorithm seems well-suited to Mercury.
+           However it is incomplete.
+
+           The main contribution of HGC is the marking algorithm.
+           This could possibly be integrated with one of the ideas
+           below.
+
+       Something else:
+
+           Investigate some other GC.  I don't know if this should be
+           accurate or conservative.  If we choose accurate we might
+           as well fix AGC.
+
+           Suggested reading:
+
+               The Train algorithm.
+
+               The conveyer-belt (or was it called 'treadmill')
+               algorithm.  Thibaud suggested this. 
+
+               Simon Marlow's recent work.
+
+           At best we should find something for which C code is
+           already available under a GPL license.  Alternatively we
+           could use a well documented algorithm.
+
