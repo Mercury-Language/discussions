@@ -70,9 +70,20 @@ Solve the problem
                The Train algorithm.
 
                The conveyer-belt (or was it called 'treadmill')
-               algorithm.  Thibaud suggested this. 
+               algorithm.  Thibaut suggested this. 
 
                Simon Marlow's recent work.
+
+               Replicating collectors (copying)
+
+               Doliguez' Thesis.
+
+               Andy King wrote a Phd Thesis about removing
+               synchronisation in GCs.  This was in 2004, wasn't he
+               already an established reasearcher 10 years earlier?!?
+
+               There is _heaps_ of information here.
+               http://www.cs.kent.ac.uk/people/staff/rej/gc.html               
 
            At best we should find something for which C code is
            already available under a GPL license.  Alternatively we
