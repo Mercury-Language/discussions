@@ -1,11 +1,13 @@
+======================================
+ The implementation of stack segments
+======================================
 
-Hi Zoltan, Peter.
+Original configuration (April 2010)
+===================================
 
-I was talking with Julien, Peter Wang and Ian today about the stack segment grades.
-
-The existing runtime system allocates memory for stacks in units of MR_unit,
+The original runtime system allocates memory for stacks in units of MR_unit,
 which is the maximum of the page size and a value that is an estimate of a
-CPU's layer one cache size.  (This is a bug, this value should be guaranteed to
+CPU's level one cache size.  (This is a bug, this value should be guaranteed to
 be a multiple of the page size).  All memory 'zones' (contiguous regions) have
 some usable memory, an optional redzone, and a hardzone.
 
@@ -61,23 +63,9 @@ have a hard-zone since they're often used with hand written C.  I
 spoke with Zoltan about this recently, he agreed that the hard-zone
 isn't necessary for stack segment zones.
 
-Last week we spoke about the idea of possibly using a red zone _if_ we
-think there are performance issues with testing the current position
-in the stack segment at runtime.  However this is not something we're
-currently considering.  Since the support already exists in the
-runtime I'd rather not remove it, or the hardzone for stack segments.
-We should disable these for stack segments, but leave support in the
-runtime in-case we want to experiment with a redzone later on.
-
-Further improvements should be made and tested.  For one thing each
-engine should keep it's own cache of free stack segments.  And the
-test and update the stack pointer code should be re-written.  It
-should be possible to write it in assembly and gain a performance
-boost.
-
 
 Stack segments bug
-------------------
+==================
 
 Mercury programs in the asm_fast.gc.par.stseg grade crash.  The crash
 occurs in a forked-off computation, when it attempts to dereference
@@ -103,3 +91,100 @@ context is not saved.  The context may then contain a stack pointer
 and point to a stack segment that may have been released and
 re-allocated to a different context.  This context will then begin
 execution by trashing the other context's stack.
+
+
+Modification 1
+==============
+
+This modification was originally submitted to the Mercury Reviews list
+on Thu, 27 May 2010 11:47:04 +1000.  It is currently uncommitted as
+there are performance concerns WRT tailing and freeing of trail
+segments.
+
+The main benefits of these changes are:
+
+    Stack segments (and other memory zones) are cached when they are released
+    and can be re-used.
+
+    Some thread safety-fixes have been added.
+
+    All stack segments are now the same size, including the first segment.
+    The first segment no-longer has a redzone.
+
+    Hard zones on all memory zones have been set to the minimum of one page
+    rather than one MR_unit which is usually two pages.
+
+
+Other possible changes
+======================
+
+Last week we spoke about the idea of possibly using a red zone _if_ we
+think there are performance issues with testing the current position
+in the stack segment at runtime.  However this is not something we're
+currently considering.  Since the support already exists in the
+runtime I'd rather not remove it, or the hardzone for stack segments.
+We should disable these for stack segments, but leave support in the
+runtime in-case we want to experiment with a redzone later on.
+
+Further improvements should be made and tested.  For one thing each
+engine should keep it's own cache of free stack segments.  And the
+test and update the stack pointer code should be re-written.  It
+should be possible to write it in assembly and gain a performance
+boost.
+
+
+Benchmarks from stack segments grades
+=====================================
+
+Speedtest (mmc)
+---------------
+
+This data is collected using speedtest.  speedtest measures the
+compilation speed of the compiler compiling some of it's own modules.
+The compiler doesn't use the parallel conjunction feature.  20 samples
+where taken for each configuration.
+
+Original configuration with bug fix (see above)
+
+                        Mean      Stdev
+----------------------------------------
+asm_fast.gc:            8.76      0.38
+asm_fast.gc.stseg:      9.17      0.10
+asm_fast.gc.par:        9.43      0.15
+asm_fast.gc.par.stseg:  9.90      0.19
+
+
+Modification 1 (see above):
+
+                                 Mean      Stdev
+-------------------------------------------------
+asm_fast.gc:                     8.81      0.55
+asm_fast.gc.stseg:               9.38      0.32
+asm_fast.gc.par:                 9.46      0.28
+asm_fast.gc.par.stseg:           9.95      0.34
+asm_fast.gc.stseg (small):      10.23      0.84
+asm_fast.gc.par.stseg (small):  10.52      0.39      
+
+The 'small' options here use much smaller stack segments. (16kb) than
+the default.  Thie exaggerates the cost of stack segment management but
+not the check for whether a new segment is needed.
+
+
+Testing a modified version of the mandelbrot image renderer
+-----------------------------------------------------------
+
+Modification 1 (see above):
+No comparison to the original code has been made.
+
+                                        Mean        Stdev
+--------------------------------------------------------------
+mandelbrot.asmfast_gc.gc1               25.0        1.67
+mandelbrot.asmfast_gc.p1.gc1            26.1        0.18
+mandelbrot.asmfast_gc.p1.gc4            26.0        0.16
+mandelbrot.asmfast_gc.p4.gc1             9.79       0.48
+mandelbrot.asmfast_gc.p4.gc4             9.80       1.26
+mandelbrot.asmfast_gc.stseg.gc1         24.5        0.54
+mandelbrot.asmfast_gc.stseg.p1.gc1      25.8        0.15
+mandelbrot.asmfast_gc.stseg.p1.gc4      25.7        0.21
+mandelbrot.asmfast_gc.stseg.p4.gc1       7.63       0.75
+mandelbrot.asmfast_gc.stseg.p4.gc4       8.10       1.38
