@@ -66,9 +66,63 @@ said he'd be best to do this.  I think some profiler feedback
 information will be useful, at least to give the costs of the calls so
 that the best decision can be made.
 
+   We don't need to implement this feature immediately, it's not too
+   important for this paper.
+
 In other cases the analysis tool should do a linear search to find the
-best schedule, a later version of the runtime should do a branch and
-bound search over a N^2 search space to look for a more optimal
+best schedule, a later version of the tool should do a branch and
+bound search over the 2^N search space to look for a more optimal
 solution.  We will be able to test if the later search strategy is
 better and finding optimal solutions.
+
+
+Search space
+------------
+
+For each middle goal there are several placement options:
+
+    Place the goal with the current conjunct,
+
+    Start a new conjunct and place the goal in that.
+
+That's two options per goal, which is a search space of 2^N.
+
+In practice we can reduce this size by adding constraints, if the
+current conjunct doesn't contain a costly call then a new conjunct may
+not be started for example.  This constraint makes the search space
+linear by only allowing one division in a group of middle goals.
+However this is to simplistic.  We want to allow goals that are
+involved in dependencies between two costly calls to be placed
+independently.
+
+The search space can be come much larger if we allow goals to be
+re-ordered.
+
+Branch and bound search
+-----------------------
+
+A branch and bound search can be written with non-deterministic
+predicates, a mutable and a failure driven loop.  However Zoltan
+recommends using deterministic predicates and tracking variable values
+that have been tried.  There is a method for doing this with an
+arbitrary number of variables.
+
+  Note: We didn't do this, this suggestion was so that we could work
+  out why we ran out of nondet stack space.
+
+Each variable becomes a digit in the search space of the program, (if
+you like to think geometrically, a dimension).  Increment the least
+significant digit, if it overflows increment the next one and reset
+the current one.  Do this until you've exhausted all the possible
+values.  You will have to manage the addition and removal of variables
+as the search tree deepens and back-tracks.
+
+One can implement branch and bound simply by updating the best
+solution found so far when a solution is found and continuing the
+search.  Allow the user-code to access the best solution and update it
+during runtime (we probably wont update it but it would be good to
+support this).
+
+When a decision is encountered the user code may have to pass a
+continuation to the search code.
 
