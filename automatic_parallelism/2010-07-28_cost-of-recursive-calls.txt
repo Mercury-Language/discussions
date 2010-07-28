@@ -1,0 +1,120 @@
+# of outside calls: o
+# of inside (recursive) calls: i
+
+p() :-
+	(
+		base
+	;
+		nr,
+		r
+	).
+
+# of outside calls: o
+# of inside (recursive) calls: i
+
+level 0: shared + base 
+level 1: shared + base + shared + nr
+level 2: shared + base + 2 * (shared + nr)
+level i/o: shared + base + i/o * (shared + nr)
+depth of recursion: i/o
+
+p() :-
+	(
+		base
+	;
+	c1
+		nr1,
+		r
+	;
+	c2
+		nr2,
+		r
+	).
+
+level 0: shared + base 
+level 1: shared + base + shared + (c1/(c1+c2) nr1 + c2/(c1+c2) nr2)
+level 2: shared + base + 2 * (shared + (c1/(c1+c2) nr1 + c2/(c1+c2) nr2))
+level i/o: shared + base + i/o * (shared + (c1/(c1+c2) nr1 + c2/(c1+c2) nr2))
+depth of recursion: i/o
+
+p() :-
+	(
+		base
+	;
+	c1
+		nr1,
+		r
+	;
+	c2
+		( test ->
+		c2a
+			nr2a,
+		;
+		c2b
+			nr2b,
+			r
+		)
+	).
+
+p() :-
+	(
+		base
+	;
+		nr1,
+		r1,
+		r2
+	).
+
+level0: shared + base
+level1: 2 * (shared + base) + shared + nr
+level2: 4 * (shared + base) + 3 * (shared + nr)
+levelk: 2^k * (shared + base) + (2^k - 1) * (shared + nr)
+depth of recursion: k = log2(i/o)
+cost of the top call (top0):
+	2^(log2(i/o)) * (shared + base) + 2^(log2(i/o) - 1) * (shared + nr)
+cost of the top but 1 calls (top1):
+	(top0 - shared - nr) /2
+cost of the top but 2 calls (top2):
+	(top1 - shared - nr) /2
+
+generalizes to nr, r1, r2, r3, etc
+
+p() :-
+	(
+	cb
+		base
+	;
+	c1
+		nr1,
+		r
+	;
+	c2
+		nr2,
+		r1,
+		r2
+	).
+
+for the shape where the doubly-recursive calls are all at the bottom:
+
+botcost0 = sbase
+botcost1 = 2 * sbase + snr2
+botcostk = 2^k * sbase + (2^k - 1) * snr2
+depth of double recursion: log2(c2)
+bot = 2^(log2(c2) * sbase + 2^(log2(c2) - 1) * snr2
+    = c2 * sbase + (c2-1) * snr2
+topcost0 = bot + snr1
+topcost1 = bot + 2 * snr1
+topcostj = bot + (j+1) * snr1
+depth of single recursion: c1
+overall cost: bot + c1 * snr1
+
+for the shape where the doubly-recursive calls are all at the top:
+
+botcost0 = sbase
+botcostk = sbase + k * snr1
+depth of single recursion: c1 / cbase
+bot = sbase + (c1 / cbase) * snr1
+topcost0 = snr2 + 2 * bot
+topcost1 = 3 * snr2 + 4 * bot
+topcostj = (2^(j+1)-1) * snr2 + 2^(j+1) * bot
+depth of double recursion: log2(c2)
