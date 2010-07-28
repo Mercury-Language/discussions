@@ -126,3 +126,34 @@ support this).
 When a decision is encountered the user code may have to pass a
 continuation to the search code.
 
+
+Convergence
+===========
+
+Our current Branch and bound search converges rather slowly.
+
+It should use a cheap computation that computes the minimum value of
+the objective function given that we haven't committed to some
+decisions.  This can probably be done with a shortest path algorithm
+or perhaps critical path algorithm (used in business project
+planning).
+
+
+Objective function
+==================
+
+ minimise ParTime * ParTimeWeight + Overheads * OverheadsWeight.
+
+ ParTimeWeight = 1.0
+ OverheadsWeight = 2.0
+
+This allows us to select parallelisations minimise parallel execution
+time.  It also lets us trade 1 unit of overheads for 2 less units of
+execution time.  This helps us select more optimal parallelisations in
+terms of overheads when they have similar execution times.  We should
+do this for 'dead times' in the future also.
+
+Dead times are when resources like a stack are used while computation
+is blocked, that is the resource cannot be actively used by a
+different task.
+
