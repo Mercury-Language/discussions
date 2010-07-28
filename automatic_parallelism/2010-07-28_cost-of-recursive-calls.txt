@@ -1,5 +1,5 @@
-# of outside calls: o
-# of inside (recursive) calls: i
+# of calls from outside calls: o
+# of calls from inside (recursive) calls: i
 
 p() :-
 	(
@@ -56,6 +56,12 @@ p() :-
 		)
 	).
 
+The above instance can be transformed into a simpler instance once we
+take account of the cost of test.
+c2:c2b will become a new recursive clause.
+c2:c2a will become a new base case.
+the two base cases can be aggregated easily.
+
 p() :-
 	(
 		base
@@ -78,6 +84,9 @@ cost of the top but 2 calls (top2):
 	(top1 - shared - nr) /2
 
 generalizes to nr, r1, r2, r3, etc
+
+Note that if there are 3 recursive calls then the base (2) becomes 3
+(or some other number).
 
 p() :-
 	(
