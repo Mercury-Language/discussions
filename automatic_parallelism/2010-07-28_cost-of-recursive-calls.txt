@@ -127,3 +127,10 @@ topcost0 = snr2 + 2 * bot
 topcost1 = 3 * snr2 + 4 * bot
 topcostj = (2^(j+1)-1) * snr2 + 2^(j+1) * bot
 depth of double recursion: log2(c2)
+
+-----------------------------------------------------------------------------
+
+if two expensive goals do not overlap because of a dependency on one or more
+variables, but all the operations on all those variables are known to be
+associative and/or commutative, it should be possible to remove such
+dependencies.
