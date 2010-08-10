@@ -130,7 +130,44 @@ depth of double recursion: log2(c2)
 
 -----------------------------------------------------------------------------
 
+Implementation of the above:
+
+Keep a count and cost for the base case, the singly recursive case and
+so on.  We can merge for arbitrarily complex goals as follows:
+
+Calculating the recursion data for switches is easy:
+   Add the counts,
+   Take the weighted average of the costs.
+
+For conjunctions:
+   Convert the counts to probabilities,
+   Multiply the probabilities and convert back to counts.
+   Add the costs.
+   This comes from the idea that for control flow conjunction behaves
+   like multiplication and disjunction behaves like addition,
+   therefore (A ; B), (C ; D) can be factorized as A,C ; A,D ; B,C ;
+       B,D
+   And if A,D and B,C have the same _type_ of recursion (N recursive
+   calls each) then they can be merged using the addative properties
+   of switches above.
+
+Handling ITEs is easy, just combine the above.
+
+Handling disjunctions will be more difficult, I don't know how.
+
+Handling semidet conjunctions could also be interesting.
+
+The other challenge is that this relies on coverage information,
+coverage information is collected per proc static.  However cost
+information is collected per call site dynamic.  These aren't
+comparable and we won't be able to calculate the depth of recursions.
+I believe that we need per proc dynamic coverage information, which is
+possible but may not be feasible.
+
+-----------------------------------------------------------------------------
+
 if two expensive goals do not overlap because of a dependency on one or more
 variables, but all the operations on all those variables are known to be
 associative and/or commutative, it should be possible to remove such
 dependencies.
+
