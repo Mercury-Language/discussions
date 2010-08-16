@@ -1,0 +1,60 @@
+DATA STRUCTURE
+assoc_list or map
+	key: # of recursive calls so far
+	value1: frequency, measured as a fraction [0-1]
+	value2: cost, measured as CSCs
+
+condense:
+if List has two or more entries with same rec call #, merge them into one
+	compute the merged entry using
+		addition for the prob field
+		weighted average (weighted by prob) for the cost field
+
+analyze_goal:
+Goal is a unify or builtin call:
+	[{rec call # 0, prob 1, cost: 0}]
+Goal is nonrecursive call:
+	[{rec call # 0, prob 1, cost: whatever cost is}]
+Goal is recursive call:
+	[{rec call # 1, prob 1, cost: 0}]
+Goal is a empty conjunction:
+	[{rec call # 0, prob 1, cost: 0}]
+Goal is a nonempty conjunction:
+	List := []
+	for each entry1 in Conj
+		if success probability of Conj < 1 then
+			Entry := {
+				entry1.rec call #,
+				entry1.prob,
+				entry1.cost}
+			List := List ++ [Entry]
+		if success probability of Conj > 0 then
+		for each entry2 Conjs
+			Entry := {
+				entry1.rec call # + entry2.rec call #,
+				entry1.prob * entry2.prob * succ_prob,
+				entry1.cost + entry2.cost}
+			List := List ++ [Entry]
+	condense List
+	return List
+Goal is a switch:
+	do this for each arm with nonzero probability of entry
+	multiply every probability in the result for an arm
+		by the probability of entry into that arm
+	condense the resulting List
+	return List
+Goal is an if-then-else:
+	if there is a recursive call in the condition, give up
+	handle (C -> T ; E) as if it were C, (T ; E)
+	using the probabilities recorded for T and E
+Goal is a semidet disjunction:
+	if there is a recursive call in any disjunct, give up
+	compute cost of each arm
+	multiply the cost of each arm
+		with the probability entering that arm
+	condense List
+	return List
+Goal is a nondet disjunction:
+	give up
+Goal is an existential quantification:
+	give up
