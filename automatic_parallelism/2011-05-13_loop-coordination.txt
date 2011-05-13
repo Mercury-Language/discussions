@@ -1,0 +1,169 @@
+
+Revisiting loop coordination
+----------------------------
+
+Consider the right recursion transformation we already designed:
+
+pl(In, Out) :-
+	(
+		base case
+	;
+		p(In, X),
+		...,
+		pl(In, X, TmpOut),
+		...
+		Out = ...
+	).
+
+pl(In, Out) :-
+	create_loop_control(8, LC),
+	pl'(LC, In, Out).
+
+pl'(LC, In, Out) :-
+	(
+		base case
+	;
+		( if
+			free_slot_in(LC, FS)
+			% short_spark_queue,
+		then
+			spawn_off(FS,
+				(p(In, X),
+                                % X is a future, we don't need to copy
+	                        % to the parent, but we would copy any
+                                % normal outputs.
+				join_and_terminate(FS, LC))
+			),
+			...,
+			pl'(LC, In, X, TmpOut),
+			...,
+			join_and_continue(FS, LC),
+			Out = ...
+		else
+			p(In, X),
+			...,
+			pl'(LC, In, X, TmpOut),
+			...
+			Out = ...
+		)
+	).
+
+The granularity control in this design won't work.  If the loop
+iterates millions of times but each iteration is cheap, then the
+overheads will still exceed the savings of parallelising each
+iteration, even with the granularity control check here.  It only
+helps when tasks are large enough but there aren't enough processors.
+
+The solution below works better, but it may not be an improvement when
+X is a future as below, there may not be enough overlap (especially
+when p/2 is cheap) to overcome the overheads.  Even a non-specific
+granularity control transformation can't improve cases like this
+simply because the code is too linear.
+
+pl(In, Out) :-
+    create_loop_control(8, LC),
+    pl'(LC, In, Out).
+
+pl'(LC, In, Out) :-
+    (
+        finish_loop(LC),
+        base case
+    ;
+        new_future(X),
+        spawn_off(LC,
+                  p(In, X),
+        ),
+        pl'(LC, In, X, TmpOut),
+        ...,
+        Out = ...
+    ).
+
+Left recursive loops can be transformed as follows:
+
+pl(In, Out) :-
+    pl'(LC, [], In, Out),
+
+pl'(LC, !Sparks, In, Out) :-
+    (
+        base_case,
+        create_loop_control(8, LC),
+        spawn_sparks(LC, !.Sparks),
+        finish_loop(LC)
+    ;
+        new_future(X),
+        Spark = create_spark(p(In, X)),
+        !:Sparks = [Spark | !.Sparks],
+        pl'(LC, !Sparks, In, X, TmpOut),
+        Out = ...
+    ).
+
+spawn_sparks(LC, Sparks) :-
+    map(spawn(LC), Sparks).
+
+In this transformation a future may not be consumed by pl' before
+either the base case or is called or until after the call to pl'.
+This is a significant limitation.
+The right recursive transformation doesn't have this problem, but code
+with this pattern already has a limited amount of parallelism.
+
+The loop control is:
+
+struct LoopControl {
+    SparkQuues **queues;
+    int        num_queues;
+    int        outstanding_workers;
+    bool       finish;
+}
+
+The builtins should be:
+
+create_loop_control(N, LC) {
+    % Setup loop control structure.
+    LC->queues = allocate_queues(N);
+    LC->num_queues = N;
+    LC->outstanding_workers = N;
+    LC->finish = NO;
+
+    % XXX: the nth job will be late, this won't balance well.
+    % This balance could be corrected by executing every Nth
+    % computation locally, but that delays the creation of every task
+    % after that, reducing the parallelism by 1/N.
+    % But the current solution already looses this much parallelism in
+    % dependant code because each Nth task won't be entered until all
+    % the tasks have been put on queues.
+    % The only solution that solves the balance problem is one with a
+    % single task queue, but that has more overhead.
+    Fork n-1 workers (see worker()) to work on n-1 of the queues.
+}
+
+worker(LC, N) {
+    task = get_task(LC->queues[N]);
+    if (task) {
+        MR_SUCCESS = worker(LC, N);
+        MR_GOTO(task);
+    } else if (LC->finish) {
+        ATOMIC(LC->outstanding_workers--);
+    } else {
+        Suspend, and wakeup once our queue has some work.
+    }
+}
+
+spawn_off simply adds a task to a queue in a round-robin fashion.
+It also wakes sleeping workers, an array of workers should be kept in the
+loop control structure and filled in for sleeping workers.  (Workers
+ought to be contexts).
+
+finish_loop(LC) {
+    # Become the Nth worker.
+    N = LC->num_queues;
+    
+    % Tell the other workers that there is no more work so that they exit.
+    LC->finish = YES;
+    wakeup_sleeping_workers();
+
+    % Finish this worker's work.
+    worker(LC, N);
+
+    % Wait until all the work is done.
+    SleepUntil(LC->outstanding_workers == 0);
+}
