@@ -1,3 +1,4 @@
+# vim: ts=4 sw=4 et
 
 Revisiting loop coordination
 ----------------------------
@@ -335,14 +336,16 @@ create_loop_control(N, LC) {
 }
 
 worker(LC, N) {
-    task = get_task(LC->queues[N]);
-    if (task) {
-        MR_SUCCESS = worker(LC, N);
-        MR_GOTO(task);
-    } else if (LC->finish) {
-        ATOMIC(LC->outstanding_workers--);
-    } else {
-        Suspend, and wakeup once our queue has some work.
+    do {
+        task = get_task(LC->queues[N]);
+        if (task) {
+            MR_CALL(task);
+            continue;
+        } else if (LC->finish) {
+            ATOMIC(LC->outstanding_workers--);
+        } else {
+            Suspend, and wakeup once our queue has some work.
+        }
     }
 }
 

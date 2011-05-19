@@ -29,7 +29,7 @@ Goal is a nonempty conjunction:
 				entry1.cost}
 			List := List ++ [Entry]
 		if success probability of Conj > 0 then
-		for each entry2 Conjs
+		for each entry2 in Conjs
 			Entry := {
 				entry1.rec call # + entry2.rec call #,
 				entry1.prob * entry2.prob * succ_prob,
@@ -51,7 +51,7 @@ Goal is a semidet disjunction:
 	if there is a recursive call in any disjunct, give up
 	compute cost of each arm
 	multiply the cost of each arm
-		with the probability entering that arm
+		with the probability of entering that arm
 	condense List
 	return List
 Goal is a nondet disjunction:
