@@ -223,31 +223,86 @@ dependant conjunction and loop control transformations.
 Left recursive loops can be transformed as follows
 --------------------------------------------------
 
-pl(In, Out) :-
-    pl'(LC, [], In, Out),
-
-pl'(LC, !Sparks, In, Out) :-
+map_foldr(_, _, [], Acc, Acc).
+map_foldr(M, F, [X | Xs], Acc0, Acc) :-
     (
-        base_case,
-        create_loop_control(8, LC),
-        spawn_sparks(LC, !.Sparks),
-        finish_loop(LC)
-    ;
-        new_future(X),
-        Spark = create_spark(p(In, X)),
-        !:Sparks = [Spark | !.Sparks],
-        pl'(LC, !Sparks, In, X, TmpOut),
-        Out = ...
+        map_foldr(M, F, Xs, Acc0, Acc1),
+    &
+        M(X, Y),
+        F(Y, Acc1, Acc)
     ).
 
-spawn_sparks(LC, Sparks) :-
-    map(spawn(LC), Sparks).
+Transformed for dependant parallel conjunctions.  Note that the future
+is not pushed into any call, not even the recursive call because it
+cannot be pushed over a call within the recursive call.  The compiler
+already behaves like this.  Note also that Acc1 is duplicated and
+named-apart so that each conjunct has a unique variable, the compiler
+also already handles this.
 
-In this transformation a future may not be consumed by pl' before
-either the base case or is called or until after the call to pl'.
-This is a significant limitation.
-The right recursive transformation doesn't have this problem, but code
-with this pattern already has a limited amount of parallelism.
+map_foldr(_, _, [], Acc, Acc).
+map_foldr(M, F, [X | Xs], Acc0, Acc) :-
+    new_future(FutureAcc1),
+    (
+        map_foldr(M, F, Xs, Acc0, Acc1),
+        signal(FutureAcc1, Acc1)
+    &
+        M(X, Y),
+        wait(FutureAcc1, Acc1'),
+        F(Y, Acc1', Acc)
+    ).
+
+Now transform this for loop coordination.
+
+map_foldr(M, F, L, !Acc) :-
+    Sparks = [],
+    map_foldr_lc(Sparks, LC, M, F, L, !Acc),
+    finish_loop(LC).
+
+% Note that the LC variable is an 'out' parameter.
+:- mode map_foldr_lc(in, out, in, in, in, in, out) is det.
+
+map_foldr_lc(Sparks, LC, _, _, [], Acc, Acc) :-
+    create_loop_control(8, LC),
+    spawn_sparks(LC, Sparks).
+map_foldr_lc(Sparks0, M, F, [X | Xs], Acc0, Acc) :-
+    new_future(FutureAcc1),
+    Spark = new_spark((
+        M(X, Y),
+        wait(FutureAcc1, Acc1'),
+        F(Y, Acc1', Acc)
+    ),
+    Sparks = [Spark | Sparks0],
+    map_foldr_lc(Sparks, LC, M, F, Xs, Acc0, Acc1),
+    signal(FutureAcc1, Acc1),
+    % We _need_ this barrier here so that we can return the value of
+    % Acc which is computed by Spark.
+    join_and_continue(LC, Spark).
+
+spawn_sparks(LC, Sparks) :-
+    impure_map(spawn(LC), Sparks).
+
+Compared to the normal code the compiler generates this code executes
+the sparks in the opposite order.  Which means they'll, on average,
+block less often and for less time on the dependant variable.
+
+In the above transformation the original thread executes one barrier
+per iteration.  This is slower compared to right recursion shown
+above.  The code that the compiler generates has a similar barrier, so
+this is no worse.
+
+There may be a possible optimisation, By realizing that the calls to F
+must run in sequence but the calls to M may be parallelised I wonder
+if we could split this into code that looked more like the following.
+This is a completely different optimisation, but it would be very
+powerful at avoiding synchronisation.
+
+map_foldl(M, F, L0, !Acc) :-
+    parallel_map(M, L0, L),
+    foldl(F, L1, !Acc).
+
+
+Primitives
+----------
 
 The loop control is:
 
@@ -291,8 +346,8 @@ worker(LC, N) {
     }
 }
 
-spawn_off simply adds a task to a queue in a round-robin fashion.
-It also wakes sleeping workers, an array of workers should be kept in the
+spawn_off simply adds a task to a queue in a round-robin fashion.  It
+also wakes sleeping workers, an array of workers should be kept in the
 loop control structure and filled in for sleeping workers.  (Workers
 ought to be contexts).
 
@@ -300,7 +355,8 @@ finish_loop(LC) {
     # Become the Nth worker.
     N = LC->num_queues;
     
-    % Tell the other workers that there is no more work so that they exit.
+    % Tell the other workers that there is no more work so that they 
+    % exit.
     LC->finish = YES;
     wakeup_sleeping_workers();
 
