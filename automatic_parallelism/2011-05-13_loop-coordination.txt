@@ -2,51 +2,91 @@
 Revisiting loop coordination
 ----------------------------
 
-Consider the right recursion transformation we already designed:
+Consider the right recursion transformation we already designed.
+We will use the familiar map_foldl example, parallelised in the smart
+way.  I have written it here without state variable notation.
 
-pl(In, Out) :-
-	(
-		base case
-	;
-		p(In, X),
-		...,
-		pl(In, X, TmpOut),
-		...
-		Out = ...
-	).
+map_foldl(_, _, [], Acc, Acc).
+map_foldl(M, F, [X | Xs], Acc0, Acc),
+    (
+        M(X, Y),
+        F(Y, Acc0, Acc1),
+    &
+        map_foldl(M, F, Xs, Acc1, Acc)
+    ).
 
-pl(In, Out) :-
-	create_loop_control(8, LC),
-	pl'(LC, In, Out).
+Here it is again after applying the dependant parallel conjunction
+transformation so that we can see the future that was Acc1.  The
+future is not pushed into the higher order call 'F'.  As we know
+map_foldl will be duplicated and specialised so that the future can be
+pushed into the recursive call.
 
-pl'(LC, In, Out) :-
-	(
-		base case
-	;
-		( if
-			free_slot_in(LC, FS)
-			% short_spark_queue,
-		then
-			spawn_off(FS,
-				(p(In, X),
-                                % X is a future, we don't need to copy
-	                        % to the parent, but we would copy any
-                                % normal outputs.
-				join_and_terminate(FS, LC))
-			),
-			...,
-			pl'(LC, In, X, TmpOut),
-			...,
-			join_and_continue(FS, LC),
-			Out = ...
-		else
-			p(In, X),
-			...,
-			pl'(LC, In, X, TmpOut),
-			...
-			Out = ...
-		)
-	).
+map_foldl(_, _, [], Acc, Acc).
+map_foldl(M, F, [X | Xs], Acc0, Acc) :-
+    new_future(FutureAcc1),
+    (
+        M(X, Y),
+        F(Y, Acc0, Acc1),
+        signal(FutureAcc1, Acc1)
+    &
+        map_foldl_parallel(M, F, Xs, FutureAcc1, Acc)
+    ).
+
+map_foldl_parallel(_, _, [], FutureAcc0, Acc) :-
+    wait(FutureAcc0, Acc).
+map_foldl_parallel(M, F, [X | Xs], FutureAcc0, Acc) :-
+    new_future(FutureAcc1),
+    (
+        M(X, Y),
+        wait(FutureAcc0, Acc0),
+        f(Y, Acc0, Acc1),
+        signal(FutureAcc1, Acc1)
+    &
+        map_foldl_parallel(M, F, Xs, FutureAcc1, Acc)
+    ).
+
+Now, lets apply the right-recursive loop coordination transformation
+that we're designing.  We'll consider the specialised form of
+map_foldl for two reasons:
+    1) What to do in a non-specialised form of similar code is simple
+       to deduce.
+    2) This transformation doesn't apply to the original code since it
+       no-longer contains a recursive call.
+
+map_foldl_parallel(M, F, L, FutureAcc0, Acc) :-
+    % The compiler chooses a constant for the number of threads to
+    % attempt to use, here we use eight threads.
+    create_loop_control(8, LC),
+    map_foldl_parallel_lc(LC, M, F, L, FutureAcc0, Acc).
+
+map_foldl_parallel_lc(LC, _, _, [], FutureAcc0, Acc) :-
+    % The base case.
+    wait(FutureAcc0, Acc).
+map_foldl_parallel_lc(LC, M, F, [X | Xs], FutureAcc0, Acc) :-
+    new_future(FutureAcc1),
+    (
+        free_slot_in(LC, FS)
+        % short_spark_queue
+    ->
+        spawn_off(FS, (
+            M(X, Y),
+            wait(FutureAcc0, Acc0),
+            f(Y, Acc0, Acc1),
+            signal(FutureAcc1, Acc1),
+            join_and_terminate(FS, LC)
+        ),
+        map_foldl_parallel_lc(LC, M, F, Xs, FutureAcc1, Acc),
+        % This barrier waits for the other job to complete, as it may
+        % have written it's result to our stack (but it doesn't in
+        % this example).
+        join_and_continue(FS, LC)
+    ;
+        M(X, Y),
+        wait(FutureAcc0, Acc0),
+        f(Y, Acc0, Acc1),
+        signal(FutureAcc1, Acc1),
+        map_foldl_parallel_lc(LC, M, F, Xs, FutureAcc1, Acc)
+    ).
 
 The granularity control in this design won't work.  If the loop
 iterates millions of times but each iteration is cheap, then the
@@ -54,11 +94,13 @@ overheads will still exceed the savings of parallelising each
 iteration, even with the granularity control check here.  It only
 helps when tasks are large enough but there aren't enough processors.
 
-The solution below works better, but it may not be an improvement when
-X is a future as below, there may not be enough overlap (especially
-when p/2 is cheap) to overcome the overheads.  Even a non-specific
+The solution below works better in cases where there is no shared
+variable between the conjuncts.  When there is a dependant variable
+(Acc1 in this case), there may not be enough overlap (especially when
+M/2 is cheap) to overcome the overheads.  Even a non-specific
 granularity control transformation can't improve cases like this
-simply because the code is too linear.
+simply because the code is too linear, and probably shouldn't have
+been parallelised at all.
 
 pl(In, Out) :-
     create_loop_control(8, LC),
