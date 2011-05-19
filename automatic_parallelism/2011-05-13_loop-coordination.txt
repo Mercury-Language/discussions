@@ -39,7 +39,7 @@ map_foldl_parallel(M, F, [X | Xs], FutureAcc0, Acc) :-
     (
         M(X, Y),
         wait(FutureAcc0, Acc0),
-        f(Y, Acc0, Acc1),
+        F(Y, Acc0, Acc1),
         signal(FutureAcc1, Acc1)
     &
         map_foldl_parallel(M, F, Xs, FutureAcc1, Acc)
@@ -88,39 +88,140 @@ map_foldl_parallel_lc(LC, M, F, [X | Xs], FutureAcc0, Acc) :-
         map_foldl_parallel_lc(LC, M, F, Xs, FutureAcc1, Acc)
     ).
 
-The granularity control in this design won't work.  If the loop
-iterates millions of times but each iteration is cheap, then the
-overheads will still exceed the savings of parallelising each
-iteration, even with the granularity control check here.  It only
-helps when tasks are large enough but there aren't enough processors.
+We can improve on this by moving the barrier that the original thread
+executes into the base case of the loop, where it will only be
+executed once.  This barrier now waits for all the parallel tasks to
+finish before continuing, and the thread that calls the barrier can
+also become a worker to work on some of these tasks.
 
-The solution below works better in cases where there is no shared
-variable between the conjuncts.  When there is a dependant variable
-(Acc1 in this case), there may not be enough overlap (especially when
-M/2 is cheap) to overcome the overheads.  Even a non-specific
-granularity control transformation can't improve cases like this
-simply because the code is too linear, and probably shouldn't have
-been parallelised at all.
-
-pl(In, Out) :-
+map_foldl_parallel(M, F, L, FutureAcc0, Acc) :-
+    % The compiler chooses a constant for the number of threads to
+    % attempt to use, here we use eight threads.
     create_loop_control(8, LC),
-    pl'(LC, In, Out).
+    map_foldl_parallel_lc(LC, M, F, L, FutureAcc0, Acc).
 
-pl'(LC, In, Out) :-
+map_foldl_parallel_lc(LC, _, _, [], FutureAcc0, Acc) :-
+    % This is now the _only_ barrier that the original thread
+    % executes.
+    finish_loop(LC),
+
+    % The base case.
+    wait(FutureAcc0, Acc).
+map_foldl_parallel_lc(LC, M, F, [X | Xs], FutureAcc0, Acc) :-
+    new_future(FutureAcc1),
     (
-        finish_loop(LC),
-        base case
-    ;
-        new_future(X),
-        spawn_off(LC,
-                  p(In, X),
+        free_slot_in(LC, FS)
+        % short_spark_queue
+    ->
+        spawn_off(FS, (
+            M(X, Y),
+            wait(FutureAcc0, Acc0),
+            F(Y, Acc0, Acc1),
+            signal(FutureAcc1, Acc1),
+            join_and_terminate(FS, LC)
         ),
-        pl'(LC, In, X, TmpOut),
-        ...,
-        Out = ...
+        map_foldl_parallel_lc(LC, M, F, Xs, FutureAcc1, Acc)
+    ;
+        M(X, Y),
+        wait(FutureAcc0, Acc0),
+        f(Y, Acc0, Acc1),
+        signal(FutureAcc1, Acc1),
+        map_foldl_parallel_lc(LC, M, F, Xs, FutureAcc1, Acc)
     ).
 
-Left recursive loops can be transformed as follows:
+Now that the barrier has been moved and the thread that creates all
+the tasks becomes a worker when it executes the new barrier in the
+base case the per-iteration cost is now lower.  The per-iteration cost
+can be reduced further by giving each thread it's own queue of tasks.
+This will reduce the amount of synchronisation needed by the threads
+executing the tasks.  Each thread simply iterates over it's queue of
+tasks, and the barrier at the end of each task can be implemented very
+cheaply and made part of the loop over the queue.
+
+The per-iteration cost may now be low enough that the free_slot_in
+test is no-longer needed.  But this is something that we would need to
+test.
+
+I've avoided calling this test granularity control because it isn't,
+(but it is close).  Granularity control would turn a loop with
+millions of small tasks into a loop of hundreds of larger tasks.  If
+the free_slot_in test above fails, the current task will simply be
+executed by the current thread, if it fails twice in a row, then two
+tasks will be executed in sequence by the current thread, which is
+similar to granularity control but not as powerful.  Really
+granularity control would allow us to sequence tasks like this in any
+thread, not just the current one.
+
+Lets try to transform the above code so that real granularity control
+is done.
+
+map_foldl_parallel(M, F, L, FutureAcc0, Acc) :-
+    % The compiler chooses a constant for the number of threads to
+    % attempt to use, here we use eight threads.
+    create_loop_control(8, LC),
+    map_foldl_parallel_lc(LC, M, F, L, FutureAcc0, Acc).
+
+map_foldl_parallel_lc(LC, _, _, [], FutureAcc0, Acc) :-
+    % This is now the _only_ barrier that the original thread
+    % executes.
+    finish_loop(LC),
+
+    % The base case.
+    wait(FutureAcc0, Acc).
+map_foldl_parallel_lc(LC, M, F, [X | Xs], FutureAcc0, Acc) :-
+    new_future(FutureAccGC),
+    (
+        free_slot_in(LC, FS)
+        % short_spark_queue
+    ->
+        spawn_off(FS, (
+            M(X, Y),
+            wait(FutureAcc0, Acc0),
+            F(Y, Acc0, Acc1),
+            foldl_parallel_gc(20, M, F, Xs, Acc1, FutureAccGC),
+            join_and_terminate(FS, LC)
+        ),
+        (
+            % Move ahead in the list to the 20th item (in sync with
+            % the call above)
+            drop(20, Xs, XsGc)
+        ->
+            map_foldl_parallel_lc(LC, M, F, XsGC, FutureAccGC, Acc)
+        ;
+            % Execute the base case.
+            map_foldl_parallel_lc(LC, M, F, [], FutureAccGC, Acc)
+        )
+    ;
+        M(X, Y),
+        wait(FutureAcc0, Acc0),
+        f(Y, Acc0, Acc1),
+        signal(FutureAcc1, Acc1),
+        map_foldl_parallel_lc_gc(20, LC, M, F, Xs, FutureAcc1, Acc)
+    ).
+
+map_foldl_gc(_, _, _, [], Acc0, FutureAcc) :-
+    signal(FutureAcc, Acc0).
+map_foldl_gc(N, M, F, [X | Xs], Acc0, FutureAcc) :-
+    ( N > 0 ->
+        M(X, Y),
+        F(Y, Acc0, Acc1),
+        map_foldl_gc(N - 1, M, F, Xs, Acc1, FutureAcc)
+    ;
+        signal(FutureAcc, Acc0)
+    ).
+
+This would be very effective, but the example above only works when
+iterating over a list.  There may be a more generic way to do this,
+possibly by extracting the iteration code out of the original loop,
+but it's probably a lot harder and not worth while doing immediately.
+We can discuss any ideas about it though.  Or about other ways to
+introduce true granularity control into loops like this.  Probably by
+applying the granularity control transformation before applying
+dependant conjunction and loop control transformations.
+
+
+Left recursive loops can be transformed as follows
+--------------------------------------------------
 
 pl(In, Out) :-
     pl'(LC, [], In, Out),
