@@ -1,0 +1,39 @@
+Given a parallel conjunction
+
+	p(..., X, ...) & q(..., X, ...)
+
+in which the shared variable X represents a data structure such as a list,
+we don't want to wait until X is ground to transmit its value from p to q.
+
+We can reserve a primary tag value to represent "this is not here yet".
+We could make this ptag value be the same for all types, e.g. 7 on 64 bit
+platforms.
+
+For a list, the valid ptags would be
+
+	0	nil; rest of word is zero
+	1	cons; rest of word points to cons cell with head and tail,
+		with the tail having the same three possibilities
+	7	future; rest of word is a pointer to the future
+
+Code that gets an incrementally generated value of this type as input
+would check the tag on first access to the value. If it is 7, it would wait
+on the future as usual for parallel code. When it wakes up, it would be able
+to get the value (which can have only 0 or 1 as tags) from the future.
+
+Code that generates a value incrementally should, when it binds one function
+symbol of the incrementally-generated type,
+
+	1 create a heap cell if needed by the arguments of the function symbol,
+	2 fill in the fields of the cell, with the recursively-typed fields
+		being filled in with 7-tagged pointers to futures,
+	3 it should replace the original 7-tagged pointer to the future
+		with an appropriately tagged pointer to the cell
+		or with an appropriately tagged constant (for constants)
+	4 it should then signal the future
+
+To make step 3 possible, the calling convention would need to dictate that
+when passing incrementally generated values, what should be passed is not
+the 0-, 1- or 7-tagged word, but a pointer to it. The pointer may point to a
+word in a cell on the heap (for every list element except the first), or
+to a word in a stack frame (for the first list element).
