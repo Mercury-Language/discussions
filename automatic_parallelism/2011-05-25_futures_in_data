@@ -37,3 +37,45 @@ when passing incrementally generated values, what should be passed is not
 the 0-, 1- or 7-tagged word, but a pointer to it. The pointer may point to a
 word in a cell on the heap (for every list element except the first), or
 to a word in a stack frame (for the first list element).
+
+    Step three is not necessary, it's simply an optimization.  Anything
+    reading the data structure will read a future, wait on it, which will
+    return immediatly and update the cell that pointed it to the future.  This
+    is slower, so if step 3 is easy we should do it - pbone.
+
+I've (pbone) noticed another problem. code that generates these structues has
+to be re-ordered some what so that it takes a similar form to the
+tail-call-module-constructor code, for example consider map/3 that produces a
+lazy list as it's output.  This eaxmple follows the dscription Zoltan wrote
+above, including step 3.
+
+    new_future(Future),
+    L = make_future_tag(Future),
+    (
+        map(P, L0, &L),
+    ;
+        ...
+    ),
+  
+    map(P, L, FuturePtr) :-
+        Future = *FuturePtr
+        (
+            L = [],
+            % Note that the new value is provided both by setting the pointer
+            % and by signaling the future.
+            *FuturePtr = [],
+            signal(FuturePtr, [])
+        ;
+            L = [X | Xs],
+            P(X, Y),
+            new_future(Future2),
+            FuturePtr2 = make_future_tag(Future2),
+            ConsCell = cons(Y, FuturePtr2),
+            MEMORY_WRITE_BARRIER,
+            *FuturePtr = ConsCell,
+            signal(Future, ConsCell),
+            map(P, Xs, FuturePtr2)
+        ).
+
+    Note how the cons cell is constructed before the recursive call.
+
