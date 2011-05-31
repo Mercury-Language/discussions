@@ -6,8 +6,8 @@ Revisiting loop coordination
 This document has three parts:
 
     + Right recursive loops
-    + Left recursive loops
     + Primatives
+    + Left recursive loops
 
 Right recursive loops
 ---------------------
@@ -147,6 +147,76 @@ Now that the barrier has been moved, where it will only be executed once rather
 than N times.  This makes the per-iteration cost lower.
 
 
+Primitives
+----------
+
+The primative operations we need are:
+
+    create_loop_control(Num, LC)
+    finish_loop(LC)
+    free_slot_in(LC, FS)
+    spawn_off(FS, Code)
+    join_and_terminate(FS, LC)
+
+The loop control structure is:
+
+    struct LoopControl {
+        Slots       *slots;
+        int         num_slots;
+        int         outstanding_workers;
+        Context     *waiting_context;
+    }
+
+    struct Slot {
+        Context     *context;
+        bool        is_free;
+    }
+
+The code for the primatives should be:
+
+    create_loop_control(N, LC) {
+        LC = malloc(...);
+        LC->slots = malloc(...);
+        for (i = 0; i < N, i++) {
+            LC->slots[i].context = NULL;
+            LC->slots[i].is_free = YES;
+        }
+        LC->num_slots = N;
+        LC->outstanding_jobs = 0;
+        LC->waiting_context = NULL;
+    }
+
+    finish_loop(LC) {
+        if (LC->outstanding_jobs > 0) {
+            /*
+             * We have to wait, this context should sleep while we wait.
+             */
+            MR_ENGINE(MR_eng_xtxt)->MR_ctxt_resume = resume_label;
+            LC->waiting_context = THIS_CONTEXT;
+            MR_ENGINE(MR_eng_ctxt) = NULL;
+            MR_idle(); /* this call does not return */
+        } else {
+resume_label:
+            /*
+             * At this point all the jobs are finished.
+             */
+            for (i = 0; i < LC->num_slots; i++) {
+                if (LC->slots[i].context != NULL) {
+                    release_context(LC->slots[i].context);
+                }
+            }
+        }
+    }
+
+    free_slot_in(LC, FS) {
+    }
+
+    spawn_off{FS, CodePtr} {
+    }
+
+    join_and_terminate(LC, FS) {
+    }
+
 Left recursive loops can be transformed as follows
 --------------------------------------------------
 
@@ -231,70 +301,3 @@ map_foldl(M, F, L0, !Acc) :-
     foldl(F, L1, !Acc).
 
 
-Primitives
-----------
-
-The loop control is:
-
-struct LoopControl {
-    SparkQuues **queues;
-    int        num_queues;
-    int        outstanding_workers;
-    bool       finish;
-}
-
-The builtins should be:
-
-create_loop_control(N, LC) {
-    % Setup loop control structure.
-    LC->queues = allocate_queues(N);
-    LC->num_queues = N;
-    LC->outstanding_workers = N;
-    LC->finish = NO;
-
-    % XXX: the nth job will be late, this won't balance well.
-    % This balance could be corrected by executing every Nth
-    % computation locally, but that delays the creation of every task
-    % after that, reducing the parallelism by 1/N.
-    % But the current solution already looses this much parallelism in
-    % dependant code because each Nth task won't be entered until all
-    % the tasks have been put on queues.
-    % The only solution that solves the balance problem is one with a
-    % single task queue, but that has more overhead.
-    Fork n-1 workers (see worker()) to work on n-1 of the queues.
-}
-
-worker(LC, N) {
-    do {
-        task = get_task(LC->queues[N]);
-        if (task) {
-            MR_CALL(task);
-            continue;
-        } else if (LC->finish) {
-            ATOMIC(LC->outstanding_workers--);
-        } else {
-            Suspend, and wakeup once our queue has some work.
-        }
-    }
-}
-
-spawn_off simply adds a task to a queue in a round-robin fashion.  It
-also wakes sleeping workers, an array of workers should be kept in the
-loop control structure and filled in for sleeping workers.  (Workers
-ought to be contexts).
-
-finish_loop(LC) {
-    # Become the Nth worker.
-    N = LC->num_queues;
-    
-    % Tell the other workers that there is no more work so that they 
-    % exit.
-    LC->finish = YES;
-    wakeup_sleeping_workers();
-
-    % Finish this worker's work.
-    worker(LC, N);
-
-    % Wait until all the work is done.
-    SleepUntil(LC->outstanding_workers == 0);
-}
