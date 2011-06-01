@@ -179,7 +179,7 @@ The code for the primatives should be:
         LC->slots = malloc(...);
         for (i = 0; i < N, i++) {
             LC->slots[i].context = NULL;
-            LC->slots[i].is_free = YES;
+            LC->slots[i].is_free = TRUE;
         }
         LC->num_slots = N;
         LC->outstanding_jobs = 0;
@@ -209,12 +209,73 @@ resume_label:
     }
 
     free_slot_in(LC, FS) {
+        FS = NULL;
+        if (LC->outstanding_jobs == LC->num_slots) {
+            /* In some cases we can trivially return NULL */
+        } else {
+            /*
+             * We could potentially optimize this search by starting i at the
+             * last place we looked last time we ran this loop.
+             */
+            for (i = 0; i < LC->num_slots; i++) {
+                if (LC->slots[i].is_free == TRUE) {
+                    FS = &(LC->slots[i]);
+                    /*
+                     * Note that we don't need to protect access to is_free,
+                     * only one thread ever sets it to FALSE if it is TRUE (the
+                     * original thread), and only one thread can ever set it to
+                     * TRUE once it becomes false (the thread that uses the
+                     * slot)
+                     */
+                    FS->is_free = FALSE;
+                    atomic_increment(LC->outstanding_jobs);
+                    break;
+                }
+            }
+        }
     }
 
     spawn_off{FS, CodePtr} {
+        if (FS->context != NULL) {
+            FS->context->MR_ctxt_resume = CodePtr;
+            /*
+             * This either:
+             *   1) Finds and idle engine and starts a context executing on it
+             *      immediatly.
+             *   2) Or, if there is no idle engine adds it to the global run
+             *      queue.
+             */
+            MR_schedule_context(FS->context);
+        } else {
+            /*
+             * No context has been allocated. and we'd rather not allocate one
+             * using this thread if we can help it, because that will delay
+             * other things this thread could do:
+             * 1) If there is an idle engine we should pass it a spark
+             *    representing CodePtr.
+             * 2) If there is no idle engine then queue that spark, we will
+             *    either execute it later or it will be stolen by an engine
+             *    once one becomes idle.
+             * Either way, we create and schedule a spark.  The spark will fill
+             * in the FS->context before it terminates.
+             *
+             * We need to modify the runtime in two ways to support this.
+             * 1) This spark is structuraly different to other sparks, it's not
+             *    associated with a normal parallel conjunction barrier.
+             * 2) The runtime dosn't yet support passing sparks directly to
+             *    other engines, but it should.
+             */
+            create_and_schedule_spark(CodePtr);
+        }
     }
 
     join_and_terminate(LC, FS) {
+        atomic_decrement(LC->outstanding_jobs);
+        FS->context = MR_ENGINE(MR_eng_context);
+        MEMORY_WRITE_BARRIER; /* Make sure context is visable before is_free */
+        FS->is_free = TRUE;
+        MR_ENGINE(MR_eng_context) = NULL;
+        MR_idle();
     }
 
 Left recursive loops can be transformed as follows
