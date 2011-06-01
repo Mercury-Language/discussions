@@ -43,11 +43,18 @@ to a word in a stack frame (for the first list element).
     return immediatly and update the cell that pointed it to the future.  This
     is slower, so if step 3 is easy we should do it - pbone.
 
-I've (pbone) noticed another problem. code that generates these structues has
-to be re-ordered some what so that it takes a similar form to the
-tail-call-module-constructor code, for example consider map/3 that produces a
-lazy list as it's output.  This eaxmple follows the dscription Zoltan wrote
-above, including step 3.
+I've (pbone) noticed another problem. Code that generates these structures
+has to be reordered somewhat to make sure that the signaling of the
+availability of the first element of a list does NOT wait for the rest of
+the list to be generated. Basically, we want to signal the top level cons
+cell BEFORE filling in its tail field with actual data. This means that when
+we signal it, the tail field will point to a future. This in turn means that
+we need to transform the code in a manner similar to the last-call-modulo-
+constructor optimization.
+
+For example, consider a version of list.map/3 that produces a lazy list as
+its output, together with its caller. This following shows what the
+transformation above (including step 3) should output.
 
     new_future(Future),
     L = make_future_tag(Future),
@@ -77,5 +84,5 @@ above, including step 3.
             map(P, Xs, FuturePtr2)
         ).
 
-    Note how the cons cell is constructed before the recursive call.
+Note how the cons cell is constructed and signalled BEFORE the recursive call.
 
