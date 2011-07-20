@@ -1,0 +1,168 @@
+========================================
+ Handling state update in parallel code
+========================================
+
+
+The problem
+-----------
+
+Consider some code with threaded state where that state is updated, the
+threaded state forms a dependency for parallel evaluation.  (This example is
+different from the one on Zoltan's whiteboard).
+
+p(..., !S) :-
+    q(..., !S) &
+    r(..., !S).
+
+If we have access to the definitions of q and r which are themselves expensive
+enough to parallelize.  And s is opaque and trivial (s doesn't need to be
+opaque).
+
+Note that the ratios cost(q):cost(s) and cost(r):cost(s) are important when
+deciding if this is worth while.  However, we're not concerned with that in
+this document.
+
+q(..., !S) :-
+    ...,
+    s(..., !S),
+    ....
+
+r(..., !S) :-
+    ...,
+    s(..., !S),
+    ....
+
+If we can show that the two calls to s can be applied in either order, That is:
+
+    s(A, S0, S1) && s(B, S1, S)
+    
+    and 
+
+    s(B, S0, S1) && s(A, S1, S)
+
+are equivalent WRT S0 and S, (not S1).
+
+Then we know the dependency between the calls of q and r can be avoided,
+because s is the only operation on !S.  This means that we don't need to form a
+(traditional) dependant conjunction.  We can instead use a mutex to guarantee
+the safe use of !S and because neither q nor r needs to block on the other they
+contend for !S at the same time.  The probability of blocking is much lower.
+
+
+A harder problem
+----------------
+
+We can also consider a slightly harder problem where r does not call s but
+calls t which is also commutative WRT !S.
+Although it was noted in our meeting that providing the promises for
+commutativity becomes more difficult when there are more operations to
+consider.
+
+
+Zoltan's proposal
+-----------------
+
+First we must prove that when a new value for !S is produced that the old one
+is consumed.  This is trivial when !S is a di-uo pair.  However when it is
+in-out we can use liveness analysis to check this.  (We probably want to avoid
+this transformation where the code is model_non, even though it could be done
+in a trailing grade).
+
+By allocating global storage (with a mutex) for for the state and re-writing p,
+q and r to use that storage we can transform this code:
+
+p(..., !S) :-
+    store(address, !.S),
+    (
+        q(...)
+    &
+        r(...)
+    ),
+    load(address, !:S).
+
+q(...) :-
+    ...,
+    lock(address, S0),
+    s(..., S0, S1),
+    unlock(address, S1),
+    ....
+
+r is isomormpic to q.
+
+We have four basic operations:
+
+    store   --  Initialize some storage with the value given.
+    load    --  Retrive the final value
+    lock    --  Lock the mutex and retrive the value.
+    unlock  --  Provide the new value and unlock the mutex.
+
+The address of the global is compiled into the procedures, and the procedure is
+no-longer reenterant.
+
+Secondly, if there are two instances of p running at eny given time they must
+refer to different globals, this means duplicating the body of p.
+
+
+Paul's proposal
+---------------
+
+Rather than use a global to store current value of the variable, we can use a
+heap cell (or stack slot of p) and pass it as an argument:
+
+This makes the code re-enterant.  This might seem unimportant, however it is
+important because in many cases we cannot gaurentee that the code does not
+indirectly call itself.  Because this analysis must stop at module boundaries.
+
+p(..., !S) :-
+    store(S, !.S),
+    (
+        q(..., S)
+    &
+        r(..., S)
+    ),
+    load(S, !:S).
+
+q(..., S) :-
+    ...,
+    lock(S, S0),
+    s(..., S0, S1),
+    unlock(S, S1),
+    ....
+
+This proposal is slower than Zoltan's proposal since it must copy arguments to
+and from the stack.
+
+
+Reentrant version of Zoltan's Proposal
+--------------------------------------
+
+We can make Zoltan's proposal by saving any previous version of the global
+address onto the stack, p now looks like:
+
+p(..., !S) :-
+    load(address, OldS),
+    store(address, !.S),
+    (
+        q(...)
+    &
+        r(...)
+    ),
+    load(address, !:S),
+    store(address, OldS).
+
+This proposal is faster than Paul's proposal.
+
+There is a problem with this proposal.  p forks two tasks, q and r.  If q calls
+p indirectly and p saves the current value of the variable into it's stack and
+sets up a new one then r will retrieve the wrong variable when it loads it.
+There is no way (such as with extra locking) to prevent this.
+
+
+Conclusion
+----------
+
+I (Paul) thought that the Reentrant version of Zoltan's proposal was the best.
+However, the reentrant cases of it (when p calls p indirectly) are not thread
+safe.  Therefore, I now support my own proposal, even though it is slightly
+slower.
+
