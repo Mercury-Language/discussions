@@ -6,21 +6,13 @@
 The problem
 -----------
 
-Consider some code with threaded state where that state is updated, the
-threaded state forms a dependency for parallel evaluation.  (This example is
-different from the one on Zoltan's whiteboard).
+Consider some code with threaded state where that state is updated, and the
+threaded state forms a dependency that prevents parallel evaluation.
+(This example is different from the one on Zoltan's whiteboard).
 
 p(..., !S) :-
     q(..., !S) &
     r(..., !S).
-
-If we have access to the definitions of q and r which are themselves expensive
-enough to parallelize.  And s is opaque and trivial (s doesn't need to be
-opaque).
-
-Note that the ratios cost(q):cost(s) and cost(r):cost(s) are important when
-deciding if this is worth while.  However, we're not concerned with that in
-this document.
 
 q(..., !S) :-
     ...,
@@ -32,7 +24,16 @@ r(..., !S) :-
     s(..., !S),
     ....
 
-If we can show that the two calls to s can be applied in either order, That is:
+Consider the case where we have access to the definitions of q and r,
+which are themselves expensive enough to parallelize, and s is trivial
+and may be opaque.
+
+Note that the ratios cost(q):cost(s) and cost(r):cost(s) are important when
+deciding if this is worth while. However, we're not concerned with that in
+this document.
+
+If s is the only operation on !S, and if we can show that the two calls to s
+can be applied in either order, that is:
 
     s(A, S0, S1) && s(B, S1, S)
     
@@ -40,94 +41,97 @@ If we can show that the two calls to s can be applied in either order, That is:
 
     s(B, S0, S1) && s(A, S1, S)
 
-are equivalent WRT S0 and S, (not S1).
-
-Then we know the dependency between the calls of q and r can be avoided,
-because s is the only operation on !S.  This means that we don't need to form a
-(traditional) dependant conjunction.  We can instead use a mutex to guarantee
-the safe use of !S and because neither q nor r needs to block on the other they
-contend for !S at the same time.  The probability of blocking is much lower.
+are equivalent WRT S0 and S, (not S1), then we know the dependency between
+the calls of q and r can be avoided. This means that we don't need to form a
+(traditional) dependant conjunction. We can instead put !S into a global or
+a named mutable, and use a mutex on the global or mutable to guarantee their
+safe use. We can then run q and r in parallel, interleaving their operations
+on !S. Because neither q nor r needs to block on the other except when the
+other is actually updating !S, the probability of blocking, and the total time
+spent blocking, are both much lower.
 
 
 A harder problem
 ----------------
 
 We can also consider a slightly harder problem where r does not call s but
-calls t which is also commutative WRT !S.
-Although it was noted in our meeting that providing the promises for
-commutativity becomes more difficult when there are more operations to
-consider.
+calls t which is also commutative WRT !S. It was noted in our meeting that
+providing the promises for commutativity becomes more difficult (or at least
+more tedious) when there are more operations to consider, and that we will
+probably need special syntax to make it easier.
 
 
 Zoltan's proposal
 -----------------
 
 First we must prove that when a new value for !S is produced that the old one
-is consumed.  This is trivial when !S is a di-uo pair.  However when it is
-in-out we can use liveness analysis to check this.  (We probably want to avoid
+is consumed. This is trivial when !S is a di-uo pair. However when it is
+in-out, we can use liveness analysis to check this. (We probably want to avoid
 this transformation where the code is model_non, even though it could be done
 in a trailing grade).
 
-By allocating global storage (with a mutex) for for the state and re-writing p,
-q and r to use that storage we can transform this code:
+By allocating global storage (with a mutex) for the state and re-writing p,
+q and r to use that storage, we can transform the above code into the
+following:
 
 p(..., !S) :-
-    store(address, !.S),
+    store(global_var, !.S),
     (
         q(...)
     &
         r(...)
     ),
-    load(address, !:S).
+    load(global_var, !:S).
 
 q(...) :-
     ...,
-    lock(address, S0),
+    lock(global_var, S0),
     s(..., S0, S1),
-    unlock(address, S1),
+    unlock(global_var, S1),
     ....
 
 r is isomormpic to q.
 
 We have four basic operations:
 
-    store   --  Initialize some storage with the value given.
-    load    --  Retrive the final value
+    store   --  Initialize a global variable with the value given.
+    load    --  Retrive the final value.
     lock    --  Lock the mutex and retrive the value.
     unlock  --  Provide the new value and unlock the mutex.
 
 The address of the global is compiled into the procedures, and the procedure is
 no-longer reenterant.
 
-Secondly, if there are two instances of p running at eny given time they must
-refer to different globals, this means duplicating the body of p.
+If there are two instances of p running at any given time, then they must
+refer to different globals, and this means duplicating the body of p.
 
 
 Paul's proposal
 ---------------
 
-Rather than use a global to store current value of the variable, we can use a
-heap cell (or stack slot of p) and pass it as an argument:
-
-This makes the code re-enterant.  This might seem unimportant, however it is
-important because in many cases we cannot gaurentee that the code does not
-indirectly call itself.  Because this analysis must stop at module boundaries.
+Rather than use a global to store the current value of the variable, we can
+use a heap cell (or possibly a consecutive sequence of stack slots of p)
+and pass a reference to it as an argument:
 
 p(..., !S) :-
-    store(S, !.S),
+    store(&HC, !.S),
     (
-        q(..., S)
+        q(..., &HC)
     &
-        r(..., S)
+        r(..., &HC)
     ),
-    load(S, !:S).
+    load(&HC, !:S).
 
-q(..., S) :-
+q(..., &HC) :-
     ...,
-    lock(S, S0),
+    lock(&HC, S0),
     s(..., S0, S1),
-    unlock(S, S1),
+    unlock(&HC, S1),
     ....
+
+This makes the code re-enterant. This is important because in many cases
+we cannot guarantee that the code does not indirectly call itself. Any analysis
+that tries to prove this will typically have to stop at module boundaries.
 
 This proposal is slower than Zoltan's proposal since it must copy arguments to
 and from the stack.
@@ -137,24 +141,24 @@ Reentrant version of Zoltan's Proposal
 --------------------------------------
 
 We can make Zoltan's proposal by saving any previous version of the global
-address onto the stack, p now looks like:
+address onto the stack. p now looks like:
 
 p(..., !S) :-
-    load(address, OldS),
-    store(address, !.S),
+    load(global_var, OldS),
+    store(global_var, !.S),
     (
         q(...)
     &
         r(...)
     ),
-    load(address, !:S),
-    store(address, OldS).
+    load(global_var, !:S),
+    store(global_var, OldS).
 
 This proposal is faster than Paul's proposal.
 
-There is a problem with this proposal.  p forks two tasks, q and r.  If q calls
-p indirectly and p saves the current value of the variable into it's stack and
-sets up a new one then r will retrieve the wrong variable when it loads it.
+There is a problem with this proposal. p forks two tasks, q and r. If q calls
+p indirectly and p saves the current value of the variable into its stack and
+sets up a new one, then r will retrieve the wrong variable when it loads it.
 There is no way (such as with extra locking) to prevent this.
 
 
@@ -163,6 +167,23 @@ Conclusion
 
 I (Paul) thought that the Reentrant version of Zoltan's proposal was the best.
 However, the reentrant cases of it (when p calls p indirectly) are not thread
-safe.  Therefore, I now support my own proposal, even though it is slightly
+safe. Therefore, I now support my own proposal, even though it is slightly
 slower.
 
+I (zs) support Paul's proposal too (though Peter helped propose it).
+
+Problems caused by module boundaries
+------------------------------------
+
+We want to know whether a procedure can call itself indirectly (it trivial
+to find out whether it can do so directly).
+
+The problem is that a procedure p can call procedures that look to be below it
+in the dependency ordering of its defining module, yet it may call procedures
+defined in other modules that can call it, either directly (if p is exported)
+or indirectly, by calling exported procedures of this module that call p.
+The only way to overcome this abstraction barrier is to effectively look
+at the set of mutually recursive modules that this module belongs to all at
+once, or at least simulate doing so. Our current intermodule optimization
+framework does not have such functionality, and providing it would be a very
+large amount of work.
