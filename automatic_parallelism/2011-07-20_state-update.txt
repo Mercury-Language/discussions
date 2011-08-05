@@ -172,6 +172,9 @@ slower.
 
 I (zs) support Paul's proposal too (though Peter helped propose it).
 
+It's just a name for the sake of labeling it, attribution should go to all
+three of us. - Paul
+
 Problems caused by module boundaries
 ------------------------------------
 
