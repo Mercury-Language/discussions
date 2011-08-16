@@ -274,9 +274,107 @@ resume_label:
         FS->context = MR_ENGINE(MR_eng_context);
         MEMORY_WRITE_BARRIER; /* Make sure context is visable before is_free */
         FS->is_free = TRUE;
+
+        if (LC->waiting_context)
+        {
+            /*
+            ** THe loop is finished and the first has already hit it's final
+            ** barrier.  We have to wake it up.
+            */
+            schedule_context(LC->waiting_context);
+        }
+
         MR_ENGINE(MR_eng_context) = NULL;
         MR_idle();
     }
+
+There are a number of optimizations here.
+
+Firstly, rather than calling schedule_context to wakeup the original context an
+engine can instead swtich to that context directly rather than going through
+the runqueue and idle loop.
+
+Secondly, a hint can be provided to free_slot_in either of the next unsearch
+slot and/or a recently freed slot.  This may help in cases where there are a
+number of slots and checking them all is wasefull.
+
+Workers could be pinned to engines to prevent cache misses after aquireing new
+work.  The cache misses arn't likly to occur for the heap but they _are_ likly
+to occur for the stack.
+
+Peter's concern 2011-08-15
+--------------------------
+
+These are preliminary benchmarks, (we should update these after making
+optimizations):
+
+    Independent parallelism:                                    ~3.9s       
+    Dependent parallelism:                                      ~4.5s
+                                                                     
+    Dependent parallelism with loop control and 4 contexts:     ~6.2s
+    Dependent parallelism with loop control and 8 contexts:     ~5.2s
+    Dependent parallelism with loop control and 16 contexts:    ~4.6s
+    Dependent parallelism with loop control and 32 contexts:    ~4.2s
+
+In the previous week's meeting Peter was concerned that there may be many wait
+states in this algorithm.  This can be caused by a case where free_slot_in
+returns false and the original context executes work locally.  Then, while it
+is working a slot becomes free but cannot retrieve new work of it's own, it must
+wait until the original thread finishes it's work before spawning off new work.
+This is mitigated by having more contexts than the number of CPUs, which
+didn't work as well as we expected; we need somewhere between 16 and 32 CPUs
+before we can beat the performance of dependant parallelism - which is more
+than I (Paul) expected.
+
+To avoid this problem the original context should go to sleep when there are no
+free slots, and be woken up when a slot has no new work to go on with.
+Furthermore, rather than being woken by being added to the runqueue it can be
+ran directly by the engine whose context ran out of work.  A similar context
+switch can be used to switch to workers.
+
+
+Avoiding waits due to blocking futures
+--------------------------------------
+
+Zoltan and I both noticed that there is also a wait state caused by blocking on
+futures.  Where code is of the form of map_foldl we suggest recognizing which
+part of the code is dependant and which is independent.  (Possibly performing
+swaps to make as much of it independent as possible).  Then, using loop control
+a list-like structure is built, each node is something like.
+
+:- lc_skel(T, U)
+    --->    lci_end
+    ;       lci_incomplete(
+                T
+                lvi_skel(T, U)
+            )
+    ;       lci_ready(
+                U,
+                lci_skel(T, U)
+            ).
+
+T and U are tuples, possibly flattened into this datastructure, T represents
+the input to the dependant part of the algorithm, and U represents the output
+from the independent part of the algorithm.
+
+The main thread (the caller of the loop) iterates quickly creating
+lci_incomplete nodes terminated by an lci_end node.  After creating the final
+node it blocks.  Each iteration of this loop passes one of the list's elements
+to a loop-control worker.  Workers turn these lci_incomplete nodes into
+lci_ready nodes using the independent code from the loop.  Another context
+(spawned by the original context) starts at the beginning of the list taking
+the lci_ready nodes and performing the dependent part of the loop to update an
+accumulator.  If it reaches an lci_incomplete nodes it sleeps until that node
+(and possibly some more nodes along the list) is/are ready, and then wakes up
+to continue.  When it finds the lci_end node it termites, communicating the
+final value of the accumulator to the original context.
+
+As nodes are consumed by the context performing the dependent part of the loop
+they are no-longer referenced and become candidates for garbage collection.
+
+Not described are ways to wake up sleeping contexts such as the context
+consuming the nodes of the list.  These are easy to imagine.
+
 
 Left recursive loops can be transformed as follows
 --------------------------------------------------
