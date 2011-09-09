@@ -105,7 +105,7 @@ We can improve on this by moving the barrier that the original thread executes
 into the base case of the loop, where it will only be executed once.  This
 barrier now waits for all the parallel tasks to finish before continuing, and
 the thread that calls the barrier can also become a worker to work on some of
-these tasks.  Note that this is not a new transformation, it's an improbment to
+these tasks.  Note that this is not a new transformation, it's an improvement to
 the above transformation.
 
 map_foldl_parallel(M, F, L, FutureAcc0, Acc) :-
@@ -191,7 +191,7 @@ The code for the primatives should be:
             /*
              * We have to wait, this context should sleep while we wait.
              */
-            MR_ENGINE(MR_eng_xtxt)->MR_ctxt_resume = resume_label;
+            MR_ENGINE(MR_eng_ctxt)->MR_ctxt_resume = resume_label;
             LC->waiting_context = THIS_CONTEXT;
             MR_ENGINE(MR_eng_ctxt) = NULL;
             MR_idle(); /* this call does not return */
@@ -240,7 +240,7 @@ resume_label:
             FS->context->MR_ctxt_resume = CodePtr;
             /*
              * This either:
-             *   1) Finds and idle engine and starts a context executing on it
+             *   1) Finds an idle engine and starts a context executing on it
              *      immediatly.
              *   2) Or, if there is no idle engine adds it to the global run
              *      queue.
