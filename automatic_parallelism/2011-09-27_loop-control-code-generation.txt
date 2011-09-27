@@ -1,0 +1,58 @@
+
+Loop control code generation
+============================
+
+The loop control source-to-source transformation transforms a parallel
+of the form:
+
+    (
+        code(...)
+    &
+        recursive_call(...)
+    )
+
+Into a plain conjunction of the form:
+
+    lc_wait_free_slot(LC, LCS),
+    scope(loop_control(LC, LCS),
+        code(...),
+        join_and_terminate(LC, LCS)),
+    recursive_call(...).
+
+The code generator must handle the code in the scope goal specially, it
+should translate the scope goal into a call to spawn off that runs the
+code within the scope.  The LLDS instruction stream for the scope should look
+something like this.
+
+    // Move the LCS variable to MR_r1.
+    MR_r1 = LCS_Stack_Slot;
+
+    // Spawn off reads LCS from MR_r1 (it could also read it directly if
+    // we created a special LLDS instruction for spawn_off).
+    spawn_off(SpawnOffLabel);
+
+    goto JumpAfterSpawnLabel;
+
+SpawnOffLabel:
+    
+    // The code for "code(...)" above goes here,
+    // It is generated normally and then occurrences of MR_sp are
+    // replaced with MR_parent_sp
+
+    // The call to join_and_termiate(LC, LCS) is also generated
+    // normally.  It isn't in the current version of the
+    // source-to-source transformation but I will add it.
+
+    // Execution stops here.
+
+JumpAfterSpawnLabel:
+
+Note that the block between the label and the call to join_and_terminate
+can be moved anywhere within the procedure body.  It might be marginally
+faster to move it to the end of the procedure so that the goto can be
+omitted and the code that implements the recursive call can be hotter in
+the CPU's instruction cache.
+Since the generate_code predicate in the code generator only has one
+output for code this isn't trivial and is probably a micro-optimization
+and not worth modifying the rest of the code generator for.
+
