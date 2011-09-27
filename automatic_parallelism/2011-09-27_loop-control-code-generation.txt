@@ -56,3 +56,80 @@ Since the generate_code predicate in the code generator only has one
 output for code this isn't trivial and is probably a micro-optimization
 and not worth modifying the rest of the code generator for.
 
+
+Candidates for LLDS instructions
+--------------------------------
+
+These builtin procedures (par_builtin.m) are candidates for becoming LLDS
+instructions.  Most have runtime code implemented in
+runtime/mercury_par_builtin.[ch].  This runtime code will eventually all be
+converted to C macros as that is likely to be more efficient.  This will be done
+as the runtime loop control code is refined and tweaked.
+
+None of the calls block the engine for long, they call use spinlocks and never
+hold the lock for long.  The calls that take a while to return suspend the
+context.
+
+:- impure pred lc_default_num_contexts(N::out) is det.
+
+    Returns the default number of contexts, this call reads a single
+    statically allocated memory cell and returns the result.
+
+:- pred lc_create(N::in, LC::out) is det.
+
+    Creates a loop control structure with N slots.  This invokes the GC's malloc.
+
+:- impure pred lc_finish(LC::in) is det.
+
+    Suspends the context while all outstanding workers finish, if necessary.
+    Releases all the contexts used by workers back to the runtime.
+
+    I intend to have this call only release the contexts for the slots that
+    where free when it was called and have other workers release their own
+    contexts.  This may make completion of the loop faster.
+
+:- impure pred lc_wait_free_slot(LC::in, LCS::out) is det.
+
+    Suspends the context until a free slot is available.  The context is not
+    suspended if a context is immediately available.
+
+    Always returns a free slot.
+
+:- impure pred lc_free_slot(LC::in, LCS::out) is semidet.
+
+    Non-blocking version of the above, this was our previous design.  If we use
+    this in the future it will probably be with hand written code.
+
+C Macro, MR_lc_spawn_off(LCS, Label)
+
+    This macro spawns off the computation whose first instruction is marked by
+    Label.  The given loop control slot is used to run the computation.
+
+    This call returns immediately after scheduling the context that will execute
+    label.
+    
+    In the future this call may suspend the current context and execute the one
+    it creates, this is desirable if this is the last free slot available.  In
+    these cases switching contexts directly will avoid use of the global run
+    queue.  To do this it may also need to take LC as a parameter.
+
+:- impure pred lc_join_and_terminate(LC::in, LCS::in) is det.
+
+    Complete a parallel job.  LCS is marked as free and if the master context
+    is suspended it is woken up (in the future it may be switched to directly
+    in some cases).
+
+I can think of one other primitive that may be needed but which doesn't exist
+yet.  When tail recursion is used in loop controlled loops we may not use the
+parent stack pointer.  Therefore, the spawned off context's stack frame needs to
+be setup.
+
+We may need to do this with two types of operation and have code generated that
+uses both of them.
+
+    MR_incr_sp_of_lc_context(LCS, N);
+
+    MR_copy_to_lc_context_stack(LCS, rval, StackSlotNum);
+
+
+
