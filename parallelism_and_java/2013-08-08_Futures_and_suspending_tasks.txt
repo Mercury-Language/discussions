@@ -1,0 +1,47 @@
+
+Problem:
+
+In java we cannot capture a context the way we can in low-level C.
+Therefore when a computation blocks on a 'wait' we cannot easily save it's
+context so that it can be resumed later.  Also, most JVMs now use only
+native threads which means that like in C it would be good to implement our
+own N:M threading.
+
+
+Solution:
+
+What we can do is throw an exception when a task suspends on a future.  The
+exception should contain all the automatic variables that are currently live
+at the time of the suspension.  It should also point to the code that should
+be resumed, this will obviously be a Java object.  Effectively this will be a
+closure.
+
+Once we want to resume the context we execute the closure.  This means
+overheads for parallel code, however these overheads will only be used in
+places where futures are used.  They are also nestable so we can still push
+futures into callees - this means nested try/catch statements to capture the
+automatic variables within each call level.
+
+Note that this is still tail-call compatible, if the call that waits on a
+future is a tail call, then we don't need to capture any context (in the
+current call) if wait blocks.  We can call it as a tail call directly.  I'm
+not sure how or if we implement tail calls in Java.
+
+Choice #1:
+We could choose to generate the code after the wait on the future as normal,
+however we could also choose to call the same closure as we would have
+constructed had the future waited.  In other words, if wait does not block we
+could execute code normally, or to save code space we could call the closure
+we would have created directly.  The latter option will require throwing an
+exception to unwind stack frames and letting the closures that we've built
+up at each level reconstruct new stack frames.
+
+Choice #2:
+Assuming that we choose to always use a closure regardless of whether wait
+blocks or not, then we know that any code with a wait on every execution
+path (see dep_par.m) will always throw an exception and never return
+normally.  Therefore we can avoid throwing of exceptions and return the
+closure in a call's return value.  I don't know if this provides any benefit
+as exceptions are relatively efficient in Java.
+
+
