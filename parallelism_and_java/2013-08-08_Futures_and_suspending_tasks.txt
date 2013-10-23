@@ -4,7 +4,7 @@ Problem:
 In java we cannot capture a context the way we can in low-level C.
 Therefore when a computation blocks on a 'wait' we cannot easily save it's
 context so that it can be resumed later.  Also, most JVMs now use only
-native threads which means that like in C it would be good to implement our
+native threads which means that, as in C, it would be good to implement our
 own N:M threading.
 
 
@@ -45,3 +45,8 @@ closure in a call's return value.  I don't know if this provides any benefit
 as exceptions are relatively efficient in Java.
 
 
+Notes:
+
+Note that this does not work for Mercury's concurrent support, as it would
+require every single call in Java to behave like this, which would reduce
+performance damantically.
