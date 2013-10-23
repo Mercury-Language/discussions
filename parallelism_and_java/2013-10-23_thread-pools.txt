@@ -1,0 +1,139 @@
+
+Java and Thread Pools
++====================
+
+Background
+----------
+
+In the low-level C backend there are three layers of parallel/concurrent
+'tasks':
+
+    Engines:  1-to-1 mapping to pthreads and CPU cores, there are
+              (currently) a fixed number of engines in a running Mercury
+              program.  THe number of engines to create is determined when
+              the program starts.
+
+    Contexts: A userspace thread object, these run on engines and can be
+              suspended and resumed.  They cannot be preempted.  They are
+              less heavy-weight than engines.
+
+    Sparks:   A not yet executed task.  They are very lightweight (basically
+              a closure).  They are converted to contexts when executed.
+
+In a Java environment we do not have the ability to create contexts, that is
+userspace thread objects that can be suspended and resumed.  Some JVMs use
+userspace threading for the Java Thread object, but these are very uncommon.
+
+In the low level C backend the non-preemptability and lack of timing
+interrupts makes the scheduling of contexts extremely efficient.
+
+
+The problem
+-----------
+
+Userspace threading (such as we have on the low level C backend) is
+desirable.  It allows us to manage a larger number of concurrent tasks
+without either a large memory overhead, or increasing the burden on the
+scheduler (because contexts are non-preemptable).  However doing this in
+Java is not going to be possible.  We want to find a solution that minimises
+the number of Threads used while allowing a blocking operation, such as a
+wait on an mvar, to not block work it doesn't need to.
+
+See also my notes on how to do this in the controlled context of parallel
+conjunctions.
+
+
+Proposed solution
+-----------------
+
+I propose creating the following objects.
+
+    Threads       - Native Java threads, there should be a variable number
+                    of threads but never fewer than a fixed number which
+                    should be by default the number of processors, lets call
+                    it P.
+    Tasks         - Lightweight objects, essentially closures (Like Java's
+                    Runnable interface).
+
+When a Mercury/Java program starts it should create the initial set of
+worker threads (usually as many as there are processors/SMT threads).
+These are used to execute Tasks.  A thread that does not have a task will
+wait for one (or poll, to be decided/tested).  After finding and executing a
+task, a thread will try to execute another task.
+
+spawn/3 should create tasks and pass them to a scheduler.  Parallel
+conjunctions will also create tasks but those tasks may be different, see my
+notes on that topic.
+
+There should be a global variable, protected by synchronisation, that gives
+the current load of the system.  When a thread starts executing a task it
+should atomically increment the counter, when it finishes it should
+atomically decrement the counter.  When a task is blocked by a mvar,
+channel or other concurrency primitive it should decrement the counter, and
+increment it again when it becomes unblocked.
+
+The scheduler will inspect this counter when it receiving a task (eg: from
+spawn/3).  If the counter is less than the maximum amount of load (same
+value as P), then it should allow the task to be executed by a thread
+(either by notification or polling).  If the counter is more than or equal
+to the maximum amount of load, then the task's execution should be delayed
+until the load drops below this threshold.
+
+This means that as much as possible there will be only a few 'active'
+threads contending for CPU time, and threads will be re-used which amortizes
+thread creation/destruction costs.  These are the goals of any thread pooling
+implementation.  However, in our implementation when many tasks become
+unblocked, there may be many active threads.  We won't know if this is
+common or which workloads create this kind of pathological behaviour until
+later.  Additionally, inactive threads will continue to consume memory which
+can cause problems.  We've experienced problems like these with the
+low-level C backend,  (See Bone 2012, Automatic Parallelism for Mercury,
+Chapters 3 and 5.)
+
+When a thread finishes executing a task, it there are more than P active 
+threads then the thread terminates.  If there are less than P active threads
+but more than P active and inactive threads then one of the other inactive
+threads should have found some work to execute (or maybe is in the process
+of doing this), the best behaviour in this case will depend on whether we
+use polling or notification.  If there are more than (or equal to) P active
+and inactive threads then this thread will enter its idle loop (polling or
+notification dependent)
+
+Many details here have not been specified.  They will depend on other
+implementation choices that we may not be able to make until later, either
+because we learn as we implement or due to experimentation.
+
+
+Further ideas
+-------------
+
+Tasks should generally be executed in FIFO order, but it may be
+better to use other orders as we've discussed for sparks and contexts in the
+low level C backend, but not yet tested or implemented.
+
+Consider a work stealing system rather than a central pool of work.
+
+
+A note about ODASE
+------------------
+
+I have implemented a scheduler in MCit's ODASE platform.  The plan was to
+drop this scheduler into Mercury's Java backend, however it will need some
+modification, which will not be too difficult.  I initially developed it as
+part of ODASE so I could experiment with it there.  Once it is moved to
+Mercury, or Mercury supports thread pooling using another scheduler then I
+hope that ODASE can use Mercury's scheduler, rather than have two schedulers
+that manage resources assuming they're the only one.
+
+ODASE tasks and the current ODASE scheduler have the concept of
+dependencies.  The aim of this dependency awareness is so that if the task B
+depends on A, then B cannot start executing (remember tasks are much like
+closures/sparks), until A does.  That way it is less likely that we will
+need to block A and the thread it's running on.  Creating dependency
+information for Mercury is only possible in the case of parallel
+conjunctions.  It is not possible when using the concurrency support in the
+thread module (at least the required analysis can probably never be
+complete).  This will be safe even though it is not optimal as the proposed
+Mercury scheduler can tolerate some blocking of threads.
+
+
